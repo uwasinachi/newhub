@@ -1,0 +1,948 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>NewHub Forex Dashboard | AI Enhanced</title>
+    <!-- Load Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Load Inter font -->
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@100..900&display=swap" rel="stylesheet">
+    <style>
+        /* Custom font application and dark background */
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #0d111c; /* Deep space blue/dark background */
+        }
+        .signal-buy { background-color: #10b981; color: #0d111c; } /* Emerald green */
+        .signal-sell { background-color: #ef4444; color: #0d111c; } /* Red */
+        .signal-card, .dashboard-card {
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+            transition: transform 0.2s, box-shadow 0.2s;
+            border: 1px solid #1f2937;
+            background-color: #1a2333;
+        }
+        .win-rate-ring {
+            background: conic-gradient(#10b981 var(--p), #1f2937 var(--p));
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            position: relative;
+        }
+        .win-rate-inner {
+            background: #0d111c;
+            border-radius: 50%;
+            width: 80%;
+            height: 80%;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+        }
+        /* Modal Backdrop */
+        .modal-backdrop {
+            background-color: rgba(0, 0, 0, 0.7);
+        }
+    </style>
+</head>
+<body class="min-h-screen text-gray-200">
+
+    <!-- Firebase Imports for Real-time Data (MANDATORY) -->
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged, signOut } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getFirestore, doc, onSnapshot, collection, query, setDoc, getDoc, runTransaction } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+        import { setLogLevel } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+        
+        // --- GLOBAL VARIABLES from Canvas Environment (MANDATORY) ---
+        const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
+        const firebaseConfig = JSON.parse(typeof __firebase_config !== 'undefined' ? __firebase_config : '{}');
+        const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
+
+        // --- FIREBASE INITIALIZATION ---
+        let app, db, auth, userId = null; // userId will be set after successful authentication
+        setLogLevel('Debug'); 
+
+        window.initFirebase = async () => {
+            try {
+                if (Object.keys(firebaseConfig).length === 0) {
+                    throw new Error("Firebase configuration not found. Cannot initialize Firestore.");
+                }
+                app = initializeApp(firebaseConfig);
+                db = getFirestore(app);
+                auth = getAuth(app);
+                window.db = db; // Make DB available globally for listeners
+                window.auth = auth; // Make Auth available globally for sign out
+
+                // 1. Use custom token if provided
+                if (initialAuthToken) {
+                    await signInWithCustomToken(auth, initialAuthToken);
+                }
+
+                // 2. Handle Authentication State Changes
+                onAuthStateChanged(auth, async (user) => {
+                    if (user) {
+                        userId = user.uid;
+                    } else {
+                        // Sign in anonymously if no token or user exists
+                        if (!auth.currentUser) {
+                            try {
+                                const anonymousUser = await signInAnonymously(auth);
+                                userId = anonymousUser.user.uid;
+                            } catch (e) {
+                                console.error("Anonymous sign-in failed:", e);
+                                window.showMessage("FATAL: Could not sign in. Check permissions.", true);
+                                userId = null;
+                            }
+                        }
+                    }
+                    
+                    if (userId) {
+                        // For multi-user apps, MANDATORY to show userId
+                        document.getElementById('user-id-display').textContent = userId;
+                        console.log("Firebase Auth Ready. User ID:", userId);
+                        // 3. Start Data Listeners only after userId is definitively set
+                        window.startListeners(); 
+                    } else {
+                        console.log("Authentication failed or user signed out.");
+                        // Handle case where authentication fails completely
+                        window.setView('login');
+                    }
+                });
+
+            } catch (error) {
+                console.error("Firebase initialization failed:", error);
+                window.showMessage("ERROR: Could not connect to the database. Check console for details.", true);
+            }
+        };
+
+        // --- FIRESTORE UTILITIES (MOCKING MT5 DATA STORAGE) ---
+
+        // Public collection path for standard signals
+        const getSignalsCollectionPath = () => `artifacts/${appId}/public/data/forex_signals`;
+        // Public collection path for premium signals
+        const getPremiumSignalsCollectionPath = () => `artifacts/${appId}/public/data/premium_forex_signals`;
+        // Private document path for user account settings (Risk Management)
+        const getSettingsDocPath = () => `artifacts/${appId}/users/${userId}/account_settings/config`;
+        
+        // Function to listen to ALL signals (Standard and Premium)
+        window.startListeners = () => {
+            // CRITICAL GUARD: Only start listeners if DB and authenticated userId are available.
+            if (!db || !userId) {
+                console.warn("Listeners blocked: Database or UserId missing. Waiting for Auth.");
+                return;
+            }
+
+            // Listener for Standard Signals
+            onSnapshot(collection(db, getSignalsCollectionPath()), (snapshot) => {
+                window.signals = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+                window.renderSignals(window.signals, 'signals-container');
+                window.updateDashboardStats();
+            }, (error) => {
+                console.error("Error listening to standard signals (Will retry):", error);
+                window.showMessage("Error updating standard signals. Check connection.", true);
+            });
+
+            // Listener for Premium Signals
+            onSnapshot(collection(db, getPremiumSignalsCollectionPath()), (snapshot) => {
+                window.premiumSignals = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+                // Re-render only if the premium view is active
+                if (window.currentView === 'premium') {
+                    window.renderSignals(window.premiumSignals, 'premium-signals-container');
+                }
+            }, (error) => {
+                console.error("Error listening to premium signals (Will retry):", error);
+                window.showMessage("Error updating premium signals. Check connection.", true);
+            });
+
+
+            // Listener for User Settings (Balance, Equity, Risk)
+            const settingsDocRef = doc(db, getSettingsDocPath());
+            onSnapshot(settingsDocRef, (docSnap) => {
+                if (docSnap.exists()) {
+                    window.userSettings = docSnap.data();
+                } else {
+                    // Initialize default settings if they don't exist
+                    window.userSettings = {
+                        balance: 10000.00, 
+                        equity: 10000.00,
+                        lotSize: 0.1,
+                        maxTrades: 5,
+                        riskPercent: 1.0 
+                    };
+                    window.saveSettings(); // Save defaults
+                }
+                window.updateSettingsDisplay();
+            }, (error) => {
+                console.error("Error listening to user settings (Will retry):", error);
+                window.showMessage("Error retrieving user settings. Check connection.", true);
+            });
+        };
+
+        // Function to save risk management settings
+        window.saveSettings = async () => {
+            if (!db || !userId) {
+                console.error("Attempt blocked: Database or UserId not ready.");
+                window.showMessage("App is connecting. Please wait for authentication to complete.", true);
+                return;
+            }
+            try {
+                const settingsDocRef = doc(db, getSettingsDocPath());
+                await setDoc(settingsDocRef, window.userSettings, { merge: true });
+                window.showMessage("Settings saved successfully!");
+                console.log("Settings saved:", window.userSettings);
+                window.updateSettingsDisplay();
+            } catch (error) {
+                console.error("Error saving settings:", error);
+                window.showMessage("Failed to save settings. Missing permissions.", true);
+            }
+        };
+        
+        // Function to add a mock STANDARD signal (Admin feature for testing)
+        window.addMockSignal = async () => {
+            if (!db || !userId) {
+                console.error("Attempt blocked: Database or UserId not ready.");
+                window.showMessage("App is connecting. Please wait for authentication to complete.", true);
+                return;
+            }
+            try {
+                const newSignal = {
+                    pair: ["EUR/USD", "GBP/JPY", "AUD/NZD"][Math.floor(Math.random() * 3)],
+                    type: Math.random() > 0.5 ? "Buy" : "Sell",
+                    entry: (Math.random() * 1.5) + 0.8, // Realistic entry
+                    tp1: (Math.random() * 0.005) + (Math.random() * 1.5) + 0.8, // Random small TP
+                    sl: (Math.random() * -0.005) + (Math.random() * 1.5) + 0.8, // Random small SL
+                    winRate: Math.floor(Math.random() * 20) + 65, // 65-85%
+                    status: ["Active", "Pending", "Closed"][Math.floor(Math.random() * 3)],
+                    timestamp: new Date().toISOString()
+                };
+                const signalsCollectionRef = collection(db, getSignalsCollectionPath());
+                await setDoc(doc(signalsCollectionRef, newSignal.pair.replace('/', '_') + '_' + Date.now()), newSignal);
+                window.showMessage(`New STANDARD mock signal added for ${newSignal.pair}!`);
+            } catch (error) {
+                console.error("Error adding mock signal:", error);
+                window.showMessage("Failed to add mock signal. Missing permissions.", true);
+            }
+        };
+
+        // Function to add a mock PREMIUM signal (90% Win, 20 SL, 100 TP)
+        window.addMockPremiumSignal = async () => {
+            if (!db || !userId) {
+                console.error("Attempt blocked: Database or UserId not ready.");
+                window.showMessage("App is connecting. Please wait for authentication to complete.", true);
+                return;
+            }
+            try {
+                const pair = ["XAU/USD", "US30", "GBP/USD"][Math.floor(Math.random() * 3)];
+                const type = Math.random() > 0.5 ? "Buy" : "Sell";
+                const entry = (Math.random() * 1.5) + 1.2; // Example entry point
+                
+                // Simulate 20 pips SL and 100 pips TP (assuming 5-digit broker, 1 pip = 0.00010)
+                const pips100 = 0.01000;
+                const pips20 = 0.00200;
+
+                const newSignal = {
+                    pair: pair,
+                    type: type,
+                    entry: entry,
+                    tp1: type === 'Buy' ? entry + pips100 : entry - pips100,
+                    sl: type === 'Buy' ? entry - pips20 : entry + pips20,
+                    winRate: 90 + Math.floor(Math.random() * 5), // Forced 90-95%
+                    status: ["Active", "Pending"][Math.floor(Math.random() * 2)],
+                    timestamp: new Date().toISOString()
+                };
+                const signalsCollectionRef = collection(db, getPremiumSignalsCollectionPath());
+                await setDoc(doc(signalsCollectionRef, newSignal.pair.replace('/', '_') + '_' + Date.now()), newSignal);
+                window.showMessage(`New PREMIUM signal added for ${newSignal.pair} (90% Confidence)!`);
+            } catch (error) {
+                console.error("Error adding mock premium signal:", error);
+                window.showMessage("Failed to add mock premium signal. Missing permissions.", true);
+            }
+        };
+        
+        // Function to log out the current user
+        window.handleLogout = async () => {
+            if (!window.auth) return;
+            try {
+                await signOut(window.auth);
+                userId = null;
+                window.showMessage("Successfully logged out.");
+                window.setView('login');
+            } catch (error) {
+                console.error("Logout failed:", error);
+                window.showMessage("Logout failed. See console.", true);
+            }
+        };
+
+
+        // --- MAIN APP LOGIC AND UI INTERACTIONS ---
+
+        document.addEventListener('DOMContentLoaded', () => {
+            window.initFirebase(); // Initialize Firebase on load
+        });
+        
+    </script>
+    
+    <!-- Application Container -->
+    <div id="app-container" class="min-h-screen">
+        
+        <!-- Header & Navigation -->
+        <header class="bg-[#1f2937] shadow-lg">
+            <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4 flex justify-between items-center">
+                <h1 class="text-3xl font-bold text-teal-400">
+                    <span class="text-white">NEWHUB</span> FOREX
+                </h1>
+                <div class="flex items-center space-x-4">
+                    <span class="text-sm text-gray-400 hidden sm:block">User ID: <span id="user-id-display" class="font-mono text-xs text-indigo-400">Loading...</span></span>
+                    <button onclick="window.setView('dashboard')" class="text-gray-300 hover:text-white transition duration-150 py-1 px-3 rounded-lg hover:bg-indigo-600/30">Standard Signals</button>
+                    <button onclick="window.setView('premium')" class="bg-yellow-500 hover:bg-yellow-600 text-gray-900 font-semibold transition duration-150 py-1 px-3 rounded-lg shadow-md">Premium Signals</button>
+                    <button onclick="window.setView('settings')" class="text-gray-300 hover:text-white transition duration-150 py-1 px-3 rounded-lg hover:bg-indigo-600/30">Settings</button>
+                    <button onclick="window.handleLogout()" class="bg-red-500 hover:bg-red-600 text-white font-semibold py-1 px-3 rounded-lg transition duration-150">Log Out</button>
+                </div>
+            </div>
+        </header>
+
+        <!-- Main Content (View Container) -->
+        <main class="max-w-7xl mx-auto p-4 sm:p-6 lg:p-8">
+            <!-- Views are rendered here -->
+            <div id="login-view" class="hidden"></div>
+            <div id="dashboard-view" class="hidden"></div>
+            <div id="premium-signals-view" class="hidden"></div>
+            <div id="settings-view" class="hidden"></div>
+        </main>
+
+        <!-- Message Box for Alerts (No alert() used) -->
+        <div id="message-box" class="fixed bottom-4 right-4 p-4 text-white rounded-lg shadow-2xl transition-opacity duration-300 opacity-0 hidden z-50">
+            <!-- Messages appear here -->
+        </div>
+
+        <!-- Gemini Analysis Modal -->
+        <div id="analysis-modal" class="fixed inset-0 modal-backdrop hidden flex items-center justify-center p-4 z-50" onclick="window.closeModal()">
+            <div class="bg-[#1a2333] w-full max-w-lg p-6 rounded-xl shadow-2xl border border-teal-400/50" onclick="event.stopPropagation()">
+                <div class="flex justify-between items-center pb-3 border-b border-gray-700">
+                    <h3 class="text-xl font-bold text-teal-400" id="analysis-modal-title">AI Signal Analysis</h3>
+                    <button onclick="window.closeModal()" class="text-gray-400 hover:text-white">&times;</button>
+                </div>
+                <div class="py-4">
+                    <div id="analysis-modal-content" class="text-gray-300 space-y-3">
+                        <p class="text-center text-lg text-yellow-500 flex items-center justify-center">
+                            <svg class="animate-spin -ml-1 mr-3 h-5 w-5 text-yellow-500" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg>
+                            Analyzing Market Data...
+                        </p>
+                    </div>
+                    <div id="analysis-sources" class="mt-4 text-xs text-gray-500 border-t border-gray-700 pt-2 hidden">
+                        <p class="font-semibold mb-1">Sources:</p>
+                        <ul id="sources-list" class="list-disc pl-5 space-y-1"></ul>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+
+    <script>
+        
+        // --- GEMINI API UTILITIES ---
+
+        const GEMINI_API_KEY = ""; // Use empty string for Canvas auto-injection
+        const GEMINI_LLM_URL = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${GEMINI_API_KEY}`;
+        const GEMINI_TTS_URL = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-tts:generateContent?key=${GEMINI_API_KEY}`;
+        
+        // Function for exponential backoff fetch
+        async function exponentialBackoffFetch(url, options, retries = 5) {
+            for (let i = 0; i < retries; i++) {
+                try {
+                    const response = await fetch(url, options);
+                    if (!response.ok) {
+                        throw new Error(`HTTP error! status: ${response.status}`);
+                    }
+                    return response;
+                } catch (error) {
+                    if (i === retries - 1) {
+                        console.error("Fetch failed after all retries:", error);
+                        throw error;
+                    }
+                    const delay = Math.pow(2, i) * 1000 + Math.random() * 1000;
+                    await new Promise(resolve => setTimeout(resolve, delay));
+                }
+            }
+        }
+
+        // TTS Helper: Base64 to ArrayBuffer
+        function base64ToArrayBuffer(base64) {
+            const binaryString = atob(base64);
+            const len = binaryString.length;
+            const bytes = new Uint8Array(len);
+            for (let i = 0; i < len; i++) {
+                bytes[i] = binaryString.charCodeAt(i);
+            }
+            return bytes.buffer;
+        }
+
+        // TTS Helper: PCM to WAV Blob
+        function pcmToWav(pcm16, sampleRate) {
+            const numChannels = 1;
+            const sampleRateB = sampleRate;
+            const bitsPerSample = 16;
+            const byteRate = sampleRateB * numChannels * (bitsPerSample / 8);
+            const blockAlign = numChannels * (bitsPerSample / 8);
+            const numSamples = pcm16.length;
+            const dataSize = numSamples * 2; // 2 bytes per sample (PCM16)
+
+            const buffer = new ArrayBuffer(44 + dataSize);
+            const view = new DataView(buffer);
+
+            function writeString(view, offset, string) {
+                for (let i = 0; i < string.length; i++) {
+                    view.setUint8(offset + i, string.charCodeAt(i));
+                }
+            }
+
+            // RIFF identifier
+            writeString(view, 0, 'RIFF');
+            view.setUint32(4, 36 + dataSize, true); // File length
+            writeString(view, 8, 'WAVE');
+            writeString(view, 12, 'fmt '); // format chunk identifier
+            view.setUint32(16, 16, true);  // format chunk length
+            view.setUint16(20, 1, true);   // Sample format (1 = PCM)
+            view.setUint16(22, numChannels, true); // Number of channels
+            view.setUint32(24, sampleRateB, true); // Sample rate
+            view.setUint32(28, byteRate, true);    // Byte rate
+            view.setUint16(32, blockAlign, true);  // Block alignment
+            view.setUint16(34, bitsPerSample, true); // Bits per sample
+            writeString(view, 36, 'data'); // data chunk identifier
+            view.setUint32(40, dataSize, true);    // data chunk length
+
+            // Write the PCM data
+            let offset = 44;
+            for (let i = 0; i < numSamples; i++) {
+                view.setInt16(offset, pcm16[i], true);
+                offset += 2;
+            }
+
+            return new Blob([view], { type: 'audio/wav' });
+        }
+
+
+        // --- GEMINI API Feature 1: Signal Analysis ---
+        window.fetchSignalAnalysis = async function(signal) {
+            const pair = signal.pair;
+            const type = signal.type;
+            const winRate = signal.winRate;
+            
+            const userQuery = `Provide a concise, fundamental and technical rationale for a ${type} signal on the ${pair} currency pair with a ${winRate}% confidence. Mention recent market drivers or key economic events affecting this pair. Focus on technical levels and fundamental factors.`;
+            
+            const systemPrompt = "You are a senior Forex Market Analyst. Provide a concise (max 3 sentences), single-paragraph summary of the current market conditions for the requested currency pair. Your output MUST be based on up-to-date information.";
+
+            const payload = {
+                contents: [{ parts: [{ text: userQuery }] }],
+                tools: [{ "google_search": {} }], // Enable grounding
+                systemInstruction: { parts: [{ text: systemPrompt }] },
+            };
+
+            try {
+                const response = await exponentialBackoffFetch(GEMINI_LLM_URL, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+                const result = await response.json();
+                const candidate = result.candidates?.[0];
+
+                if (candidate && candidate.content?.parts?.[0]?.text) {
+                    const text = candidate.content.parts[0].text;
+                    
+                    let sources = [];
+                    const groundingMetadata = candidate.groundingMetadata;
+                    if (groundingMetadata && groundingMetadata.groundingAttributions) {
+                        sources = groundingMetadata.groundingAttributions
+                            .map(attribution => ({
+                                uri: attribution.web?.uri,
+                                title: attribution.web?.title,
+                            }))
+                            .filter(source => source.uri && source.title);
+                    }
+                    return { text, sources };
+                } else {
+                    return { text: "AI analysis failed to generate a response. The market drivers are currently unclear.", sources: [] };
+                }
+            } catch (error) {
+                console.error("Gemini API call failed:", error);
+                return { text: "Failed to connect to the AI service. Please check your network connection.", sources: [] };
+            }
+        };
+
+        // UI Logic for opening and closing the Analysis Modal
+        window.showAnalysisModal = async function(signal) {
+            const modal = document.getElementById('analysis-modal');
+            const titleElement = document.getElementById('analysis-modal-title');
+            const contentElement = document.getElementById('analysis-modal-content');
+            const sourcesContainer = document.getElementById('analysis-sources');
+            const sourcesList = document.getElementById('sources-list');
+            
+            titleElement.textContent = `AI Analysis: ${signal.pair} (${signal.type})`;
+            sourcesContainer.classList.add('hidden');
+            sourcesList.innerHTML = '';
+            
+            // Set loading state
+            contentElement.innerHTML = `
+                <p class="text-center text-lg text-yellow-500 flex items-center justify-center">
+                    <svg class="animate-spin -ml-1 mr-3 h-5 w-5 text-yellow-500" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg>
+                    Analyzing Market Data (Using Google Search Grounding)...
+                </p>
+            `;
+            modal.classList.remove('hidden');
+
+            // Fetch analysis
+            const { text, sources } = await window.fetchSignalAnalysis(signal);
+            
+            // Update modal with results
+            contentElement.innerHTML = `<p>${text}</p>`;
+
+            if (sources.length > 0) {
+                sourcesList.innerHTML = sources.map(s => 
+                    `<li><a href="${s.uri}" target="_blank" class="text-teal-400 hover:underline">${s.title}</a></li>`
+                ).join('');
+                sourcesContainer.classList.remove('hidden');
+            }
+        }
+
+        window.closeModal = function() {
+            document.getElementById('analysis-modal').classList.add('hidden');
+        }
+
+        // --- GEMINI API Feature 2: Risk Summary TTS ---
+        window.speakRiskSummary = async function() {
+            const button = document.getElementById('tts-button');
+            const audioPlayer = document.getElementById('audio-player');
+            const balance = window.userSettings.balance.toFixed(2);
+            const riskPercent = window.userSettings.riskPercent.toFixed(1);
+            const riskAmount = (window.userSettings.balance * (window.userSettings.riskPercent / 100)).toFixed(2);
+
+            if (audioPlayer) audioPlayer.remove();
+            
+            const prompt = `Say cheerfully: Your current account balance is ${balance} US dollars. Your specified risk per trade is ${riskPercent} percent, which equates to risking ${riskAmount} dollars per trade. Always practice disciplined risk management!`;
+            
+            button.disabled = true;
+            button.textContent = 'Generating Audio...';
+            
+            const payload = {
+                contents: [{ parts: [{ text: prompt }] }],
+                generationConfig: {
+                    responseModalities: ["AUDIO"],
+                    speechConfig: {
+                        voiceConfig: {
+                            prebuiltVoiceConfig: { voiceName: "Kore" }
+                        }
+                    }
+                },
+                model: "gemini-2.5-flash-preview-tts"
+            };
+
+            try {
+                const response = await exponentialBackoffFetch(GEMINI_TTS_URL, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+                
+                const result = await response.json();
+                const part = result?.candidates?.[0]?.content?.parts?.[0];
+                const audioData = part?.inlineData?.data;
+                const mimeType = part?.inlineData?.mimeType;
+
+                if (audioData && mimeType && mimeType.startsWith("audio/")) {
+                    const sampleRateMatch = mimeType.match(/rate=(\d+)/);
+                    const sampleRate = sampleRateMatch ? parseInt(sampleRateMatch[1], 10) : 16000; // Default to 16kHz
+                    
+                    const pcmData = base64ToArrayBuffer(audioData);
+                    const pcm16 = new Int16Array(pcmData);
+                    const wavBlob = pcmToWav(pcm16, sampleRate);
+                    const audioUrl = URL.createObjectURL(wavBlob);
+
+                    const newPlayer = document.createElement('audio');
+                    newPlayer.id = 'audio-player';
+                    newPlayer.controls = true;
+                    newPlayer.src = audioUrl;
+                    newPlayer.classList.add('mt-4', 'w-full');
+                    
+                    document.getElementById('tts-container').appendChild(newPlayer);
+                    newPlayer.play();
+                    
+                    window.showMessage("Risk summary audio generated and playing!");
+                } else {
+                    window.showMessage("TTS generation failed. Audio data missing.", true);
+                }
+            } catch (error) {
+                console.error("TTS API call failed:", error);
+                window.showMessage("Failed to generate audio summary.", true);
+            } finally {
+                button.disabled = false;
+                button.textContent = '✨ Hear Risk Summary (TTS)';
+            }
+        }
+
+
+        // --- GLOBAL STATE & ELEMENTS ---
+        window.currentView = 'login';
+        window.signals = []; // Standard Signals Fetched from Firestore
+        window.premiumSignals = []; // Premium Signals Fetched from Firestore
+        window.userSettings = {}; // Fetched from Firestore
+
+        const viewElements = {
+            'login': document.getElementById('login-view'),
+            'dashboard': document.getElementById('dashboard-view'),
+            'premium': document.getElementById('premium-signals-view'), // New element
+            'settings': document.getElementById('settings-view')
+        };
+        const messageBox = document.getElementById('message-box');
+
+        // --- CORE APPLICATION LOGIC ---
+
+        // Function to show a temporary message instead of using alert()
+        window.showMessage = function(text, isError = false) {
+            messageBox.textContent = text;
+            messageBox.className = 'fixed bottom-4 right-4 p-4 rounded-lg shadow-2xl transition-opacity duration-300 z-50';
+            messageBox.classList.add(isError ? 'bg-red-600' : 'bg-green-600', 'opacity-100', 'block');
+            setTimeout(() => {
+                messageBox.classList.remove('opacity-100', 'block');
+                messageBox.classList.add('opacity-0', 'hidden');
+            }, 5000);
+        }
+
+        // View Switching Logic
+        window.setView = function(newView) {
+            window.currentView = newView;
+            Object.keys(viewElements).forEach(view => {
+                viewElements[view].classList.add('hidden');
+            });
+            viewElements[newView].classList.remove('hidden');
+
+            if (newView === 'dashboard') {
+                window.renderDashboard();
+            } else if (newView === 'premium') {
+                window.renderPremiumSignals();
+            } else if (newView === 'settings') {
+                window.renderSettings();
+            } else if (newView === 'login') {
+                window.renderLogin();
+                // Only show disconnect message if user was previously connected
+                if (window.userId) {
+                    window.showMessage("Disconnected. Please re-enter credentials to connect the trading bridge.");
+                }
+            }
+        }
+        
+        // 1. RENDER LOGIN VIEW
+        window.renderLogin = function() {
+            viewElements.login.innerHTML = `
+                <div class="max-w-xl mx-auto bg-[#1a2333] p-8 rounded-xl shadow-2xl border border-teal-400/50 mt-12">
+                    <h2 class="text-3xl font-bold text-white mb-6 text-center">MT5 Account Connection</h2>
+                    
+                    <div class="bg-red-800/20 text-red-400 p-4 rounded-lg mb-6 border border-red-700">
+                        <p class="font-bold">SECURITY WARNING:</p>
+                        <p class="text-sm mt-1">
+                            This frontend is a **MOCK**. For live trading, credentials must be sent to a **SECURE, ENCRYPTED BACKEND SERVER (Python/Node.js)** to protect your financial data. Do not use this UI for actual live credentials.
+                        </p>
+                    </div>
+
+                    <form id="login-form" class="space-y-4">
+                        <div>
+                            <label for="login-id" class="block text-sm font-medium text-gray-400">MT5 Login ID</label>
+                            <input type="text" id="login-id" value="123456" class="mt-1 block w-full bg-[#0d111c] border-gray-700 rounded-lg p-3 text-white focus:ring-teal-500 focus:border-teal-500" required>
+                        </div>
+                        <div>
+                            <label for="server-name" class="block text-sm font-medium text-gray-400">Server Name (e.g., Broker-Live)</label>
+                            <input type="text" id="server-name" value="Demo-Server" class="mt-1 block w-full bg-[#0d111c] border-gray-700 rounded-lg p-3 text-white focus:ring-teal-500 focus:border-teal-500" required>
+                        </div>
+                        <div>
+                            <label for="investor-password" class="block text-sm font-medium text-gray-400">Investor Password (Read-Only)</label>
+                            <input type="password" id="investor-password" value="********" class="mt-1 block w-full bg-[#0d111c] border-gray-700 rounded-lg p-3 text-white focus:ring-teal-500 focus:border-teal-500" required>
+                        </div>
+                        <button type="submit" class="w-full bg-teal-600 hover:bg-teal-700 text-white font-semibold py-3 px-4 rounded-lg transition duration-150 ease-in-out">
+                            Connect Trading Bridge (MOCK)
+                        </button>
+                    </form>
+                </div>
+            `;
+            // Attach form submission listener
+            document.getElementById('login-form').addEventListener('submit', (e) => {
+                e.preventDefault();
+                // In a real app, this would trigger the secure backend connection
+                window.showMessage("Attempting secure connection... (MOCK successful)");
+                setTimeout(() => window.setView('dashboard'), 1500);
+            });
+        }
+        
+        // 2. RENDER DASHBOARD VIEW (Standard Signals)
+        window.renderDashboard = function() {
+            viewElements.dashboard.innerHTML = `
+                <div class="bg-[#1f2937] p-6 rounded-xl mb-8 shadow-xl border-l-4 border-teal-400">
+                    <h2 class="text-2xl font-semibold mb-2 text-white">Standard MT5 Trading Signals</h2>
+                    <p class="text-gray-400">
+                        Real-time account metrics and server-generated trade signals from the standard channel.
+                    </p>
+                </div>
+
+                <!-- Account Metrics -->
+                <div class="grid grid-cols-2 md:grid-cols-4 gap-6 mb-8">
+                    <div class="dashboard-card p-5 rounded-xl flex flex-col items-center justify-center">
+                        <p class="text-4xl font-extrabold text-teal-400">$<span id="display-balance">0.00</span></p>
+                        <p class="text-sm text-gray-400 mt-1">Balance</p>
+                    </div>
+                    <div class="dashboard-card p-5 rounded-xl flex flex-col items-center justify-center">
+                        <p class="text-4xl font-extrabold text-indigo-400">$<span id="display-equity">0.00</span></p>
+                        <p class="text-sm text-gray-400 mt-1">Equity</p>
+                    </div>
+                    <div class="dashboard-card p-5 rounded-xl flex flex-col items-center justify-center">
+                        <p class="text-4xl font-extrabold text-green-500" id="display-profit">$0.00</p>
+                        <p class="text-sm text-gray-400 mt-1">Open P&L</p>
+                    </div>
+                    <div class="dashboard-card p-5 rounded-xl flex flex-col items-center justify-center">
+                        <p class="text-4xl font-extrabold text-gray-400" id="display-open-trades">0</p>
+                        <p class="text-sm text-gray-400 mt-1">Open Trades</p>
+                    </div>
+                </div>
+
+                <div class="flex justify-between items-center mb-4">
+                    <h3 class="text-xl font-semibold text-white">Standard Active & Pending Signals</h3>
+                    <button onclick="window.addMockSignal()" class="bg-indigo-600 hover:bg-indigo-700 text-white font-semibold py-2 px-4 rounded-lg text-sm transition duration-150">
+                        Add Mock Standard Signal
+                    </button>
+                </div>
+
+                <!-- Signals Grid -->
+                <section id="signals-container" class="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-3 gap-6">
+                    <!-- Standard Signal Cards will be injected here by JavaScript -->
+                </section>
+            `;
+            window.updateDashboardStats(); // Initial stats update
+            window.renderSignals(window.signals, 'signals-container'); // Initial standard signal render
+        }
+
+        // 3. RENDER PREMIUM SIGNALS VIEW
+        window.renderPremiumSignals = function() {
+            viewElements.premium.innerHTML = `
+                <div class="bg-[#1f2937] p-6 rounded-xl mb-8 shadow-xl border-l-4 border-yellow-500">
+                    <h2 class="text-2xl font-semibold mb-2 text-white">Premium Signals Channel</h2>
+                    <p class="text-yellow-400 font-medium">
+                        High-confidence trades with **90%+ Win Rate, 20 pips SL, and 100 pips TP** strategy.
+                    </p>
+                </div>
+
+                <div class="flex justify-between items-center mb-4">
+                    <h3 class="text-xl font-semibold text-white">Premium Active & Pending Signals</h3>
+                    <button onclick="window.addMockPremiumSignal()" class="bg-yellow-600 hover:bg-yellow-700 text-gray-900 font-semibold py-2 px-4 rounded-lg text-sm transition duration-150">
+                        Add Mock Premium Signal
+                    </button>
+                </div>
+
+                <!-- Signals Grid -->
+                <section id="premium-signals-container" class="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-3 gap-6">
+                    <!-- Premium Signal Cards will be injected here by JavaScript -->
+                </section>
+            `;
+            window.renderSignals(window.premiumSignals, 'premium-signals-container');
+        }
+
+        // 4. RENDER SETTINGS VIEW (RISK MANAGEMENT)
+        window.renderSettings = function() {
+            viewElements.settings.innerHTML = `
+                <div class="max-w-3xl mx-auto bg-[#1a2333] p-8 rounded-xl shadow-2xl border border-indigo-400/50 mt-8">
+                    <h2 class="text-3xl font-bold text-white mb-6">Risk Management Settings</h2>
+                    <p class="text-gray-400 mb-6">Configure how the Quantum Auto-Trader executes signals on your MT5 account.</p>
+
+                    <form id="settings-form" class="space-y-6">
+                        
+                        <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+                            <!-- Lot Size -->
+                            <div>
+                                <label for="lotSize" class="block text-sm font-medium text-gray-400">Default Lot Size (Min 0.01)</label>
+                                <input type="number" step="0.01" min="0.01" id="lotSize" class="mt-1 block w-full bg-[#0d111c] border-gray-700 rounded-lg p-3 text-white focus:ring-teal-500 focus:border-teal-500">
+                            </div>
+                            <!-- Max Trades -->
+                            <div>
+                                <label for="maxTrades" class="block text-sm font-medium text-gray-400">Maximum Concurrent Trades</label>
+                                <input type="number" step="1" min="1" id="maxTrades" class="mt-1 block w-full bg-[#0d111c] border-gray-700 rounded-lg p-3 text-white focus:ring-teal-500 focus:border-teal-500">
+                            </div>
+                        </div>
+
+                        <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+                            <!-- Risk Per Trade -->
+                            <div>
+                                <label for="riskPercent" class="block text-sm font-medium text-gray-400">Risk % Per Trade (Based on Equity)</label>
+                                <div class="relative mt-1">
+                                    <input type="number" step="0.1" min="0.1" id="riskPercent" class="block w-full bg-[#0d111c] border-gray-700 rounded-lg p-3 text-white pr-10 focus:ring-teal-500 focus:border-teal-500">
+                                    <span class="absolute inset-y-0 right-0 pr-3 flex items-center text-gray-500">%</span>
+                                </div>
+                            </div>
+                            <!-- TP/SL Multiplier -->
+                            <div>
+                                <label for="tpSlMultiplier" class="block text-sm font-medium text-gray-400">Default TP/SL Multiplier</label>
+                                <p class="text-xs text-gray-500 mb-1">Signals' levels will be multiplied by this factor (e.g., 1.0 = use signals' exact levels).</p>
+                                <input type="number" step="0.1" min="0.1" id="tpSlMultiplier" value="1.0" class="mt-1 block w-full bg-[#0d111c] border-gray-700 rounded-lg p-3 text-white focus:ring-teal-500 focus:border-teal-500">
+                            </div>
+                        </div>
+
+                        <div class="border-t border-gray-700 pt-6 space-y-4" id="tts-container">
+                            <button type="button" id="tts-button" onclick="window.speakRiskSummary()" class="w-full bg-yellow-600 hover:bg-yellow-700 text-gray-900 font-semibold py-3 px-4 rounded-lg transition duration-150 ease-in-out">
+                                ✨ Hear Risk Summary (TTS)
+                            </button>
+                        </div>
+
+                        <button type="submit" class="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-semibold py-3 px-4 rounded-lg transition duration-150 ease-in-out">
+                            Save Risk Configuration
+                        </button>
+                    </form>
+                </div>
+            `;
+            window.updateSettingsDisplay(); // Load current settings into form
+            document.getElementById('settings-form').addEventListener('submit', (e) => {
+                e.preventDefault();
+                // Update global settings object from form inputs
+                window.userSettings.lotSize = parseFloat(document.getElementById('lotSize').value);
+                window.userSettings.maxTrades = parseInt(document.getElementById('maxTrades').value);
+                window.userSettings.riskPercent = parseFloat(document.getElementById('riskPercent').value);
+                // Save to Firestore
+                window.saveSettings();
+            });
+        }
+        
+        // Function to load settings values into the settings form
+        window.updateSettingsDisplay = function() {
+            if (window.userSettings && viewElements.settings.querySelector('#settings-form')) {
+                const form = document.getElementById('settings-form');
+                if (form) {
+                    form.querySelector('#lotSize').value = window.userSettings.lotSize;
+                    form.querySelector('#maxTrades').value = window.userSettings.maxTrades;
+                    form.querySelector('#riskPercent').value = window.userSettings.riskPercent;
+                }
+            }
+            // Update Dashboard Metrics
+            const displayBalance = document.getElementById('display-balance');
+            if (displayBalance) {
+                const balance = window.userSettings.balance || 0.00;
+                const equity = window.userSettings.equity || 0.00;
+                const profit = equity - balance;
+                
+                document.getElementById('display-balance').textContent = balance.toFixed(2);
+                document.getElementById('display-equity').textContent = equity.toFixed(2);
+                document.getElementById('display-profit').textContent = (profit >= 0 ? '+' : '') + profit.toFixed(2);
+                document.getElementById('display-profit').className = 'text-4xl font-extrabold ' + (profit >= 0 ? 'text-green-500' : 'text-red-500');
+            }
+        }
+        
+        // Function to update the main statistics bar on the dashboard
+        window.updateDashboardStats = function() {
+            // Stats based on all active/pending signals
+            const allActiveSignals = [...window.signals, ...window.premiumSignals].filter(s => s.status === 'Active');
+            const totalWinRate = allActiveSignals.reduce((sum, signal) => sum + signal.winRate, 0);
+            const averageWinRate = allActiveSignals.length > 0 ? Math.round(totalWinRate / allActiveSignals.length) : 0;
+            
+            const openTrades = window.signals.filter(s => s.status === 'Active' || s.status === 'Pending').length + 
+                               window.premiumSignals.filter(s => s.status === 'Active' || s.status === 'Pending').length;
+            
+            const totalSignalsDisplay = viewElements.dashboard.querySelector('#total-signals');
+            const avgWinRateDisplay = viewElements.dashboard.querySelector('#avg-win-rate');
+            const openTradesDisplay = viewElements.dashboard.querySelector('#display-open-trades');
+
+            if (totalSignalsDisplay) totalSignalsDisplay.textContent = allActiveSignals.length;
+            if (avgWinRateDisplay) avgWinRateDisplay.textContent = `${averageWinRate}%`;
+            if (openTradesDisplay) openTradesDisplay.textContent = openTrades;
+        }
+        
+        // Generic function to render signal cards
+        window.renderSignals = function(data, containerId) {
+            const container = document.getElementById(containerId);
+            if (!container) return;
+            
+            container.innerHTML = ''; // Clear existing content
+            
+            if (data.length === 0) {
+                 container.innerHTML = `<div class="lg:col-span-3 text-center p-8 bg-[#1f2937] rounded-xl text-gray-400">No active signals found in this channel.</div>`;
+                 return;
+            }
+
+            data.forEach(signal => {
+                // Determine styling based on signal type
+                const typeClass = signal.type === 'Buy' ? 'signal-buy' : 'signal-sell';
+                const arrowIcon = signal.type === 'Buy' 
+                    ? '<svg class="w-4 h-4" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M3.293 9.707a1 1 0 010-1.414l6-6a1 1 0 011.414 0l6 6a1 1 0 01-1.414 1.414L11 5.414V17a1 1 0 11-2 0V5.414L4.707 9.707a1 1 0 01-1.414 0z" clip-rule="evenodd"></path></svg>'
+                    : '<svg class="w-4 h-4" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M16.707 10.293a1 1 0 010 1.414l-6 6a1 1 0 01-1.414 0l-6-6a1 1 0 111.414-1.414L9 14.586V3a1 1 0 112 0v11.586l4.293-4.293a1 1 0 011.414 0z" clip-rule="evenodd"></path></svg>';
+                
+                // Determine status color
+                let statusColor = 'text-gray-400';
+                if (signal.status === 'Active') statusColor = 'text-green-500';
+                if (signal.status === 'Pending') statusColor = 'text-yellow-500';
+                if (signal.status === 'Closed') statusColor = 'text-red-500';
+
+                // Create the win rate ring style variable
+                const winRateStyle = `--p: ${signal.winRate}%;`;
+
+                const signalCardHTML = `
+                    <div class="signal-card rounded-xl p-6 flex flex-col md:flex-row items-start space-y-4 md:space-y-0 md:space-x-6">
+                        
+                        <!-- 1. Win Rate Indicator (Gauge) -->
+                        <div class="flex-shrink-0 w-24 h-24 relative" style="--p:${signal.winRate}%;">
+                            <div class="win-rate-ring w-full h-full" style="${winRateStyle}">
+                                <div class="win-rate-inner">
+                                    <p class="text-xl font-bold text-white">${signal.winRate}%</p>
+                                    <p class="text-xs text-teal-400 font-semibold mt-0.5">Confidence</p>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- 2. Signal Details -->
+                        <div class="flex-grow">
+                            <div class="flex items-center justify-between mb-2">
+                                <h3 class="text-3xl font-extrabold text-white">${signal.pair}</h3>
+                                <span class="${typeClass} text-xs font-bold py-1 px-3 rounded-full uppercase flex items-center shadow-md">
+                                    ${arrowIcon}
+                                    <span class="ml-1">${signal.type}</span>
+                                </span>
+                            </div>
+
+                            <p class="text-sm font-medium ${statusColor} mb-3">
+                                Status: <span class="font-bold">${signal.status}</span>
+                            </p>
+
+                            <!-- Trading Levels -->
+                            <div class="grid grid-cols-3 gap-4 text-center border-t border-gray-700 pt-3">
+                                <div>
+                                    <p class="text-xs text-gray-500 uppercase">Entry</p>
+                                    <p class="text-sm font-semibold text-gray-200">${signal.entry.toFixed(5)}</p>
+                                </div>
+                                <div>
+                                    <p class="text-xs text-gray-500 uppercase">Take Profit</p>
+                                    <p class="text-sm font-semibold text-green-400">${signal.tp1.toFixed(5)}</p>
+                                </div>
+                                <div>
+                                    <p class="text-xs text-gray-500 uppercase">Stop Loss</p>
+                                    <p class="text-sm font-semibold text-red-400">${signal.sl.toFixed(5)}</p>
+                                </div>
+                            </div>
+                            <div class="mt-4">
+                                <button onclick="window.showAnalysisModal(${JSON.stringify(signal).replace(/"/g, '&quot;')})" 
+                                    class="w-full bg-indigo-500 hover:bg-indigo-600 text-white font-semibold py-2 px-3 rounded-lg text-sm transition duration-150">
+                                    ✨ AI Signal Analysis
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                `;
+                container.innerHTML += signalCardHTML;
+            });
+        }
+        
+        // --- INITIALIZATION ---
+        // Start by showing the login screen
+        window.onload = function() {
+            window.renderLogin();
+            window.setView('login');
+        };
+
+    </script>
+
+</body>
+</html>
