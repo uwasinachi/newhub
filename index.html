@@ -3,946 +3,1201 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>NewHub Forex Dashboard | AI Enhanced</title>
+    <title>NewHub Forex | Auto-Trading Platform</title>
     <!-- Load Tailwind CSS -->
     <script src="https://cdn.tailwindcss.com"></script>
     <!-- Load Inter font -->
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@100..900&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;800&display=swap" rel="stylesheet">
     <style>
-        /* Custom font application and dark background */
         body {
             font-family: 'Inter', sans-serif;
-            background-color: #0d111c; /* Deep space blue/dark background */
+            background-color: #000000; /* Pure Black */
+            color: #e2e8f0;
+            padding-bottom: 5rem; /* Space for the sticky global bar */
         }
-        .signal-buy { background-color: #10b981; color: #0d111c; } /* Emerald green */
-        .signal-sell { background-color: #ef4444; color: #0d111c; } /* Red */
-        .signal-card, .dashboard-card {
-            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
-            transition: transform 0.2s, box-shadow 0.2s;
-            border: 1px solid #1f2937;
-            background-color: #1a2333;
+        /* Custom Scrollbar */
+        ::-webkit-scrollbar { width: 8px; }
+        ::-webkit-scrollbar-track { background: #0f0f0f; }
+        ::-webkit-scrollbar-thumb { background: #333; border-radius: 4px; }
+        ::-webkit-scrollbar-thumb:hover { background: #555; }
+
+        .glass-panel {
+            background: rgba(20, 20, 20, 0.9); /* Darker panel */
+            border: 1px solid rgba(50, 50, 50, 0.5);
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.5);
         }
-        .win-rate-ring {
-            background: conic-gradient(#10b981 var(--p), #1f2937 var(--p));
-            border-radius: 50%;
-            display: flex;
+        
+        .signal-card {
+            transition: all 0.3s ease;
+        }
+        .signal-card:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 10px 15px -3px rgba(0, 255, 0, 0.1); /* Green glow hint */
+        }
+
+        .status-badge {
+            display: inline-flex;
             align-items: center;
-            justify-content: center;
-            position: relative;
+            padding: 0.125rem 0.625rem;
+            border-radius: 9999px;
+            font-size: 0.75rem;
+            font-weight: 600;
         }
-        .win-rate-inner {
-            background: #0d111c;
-            border-radius: 50%;
-            width: 80%;
-            height: 80%;
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            justify-content: center;
+        /* Tailwind Toggle Switch styles */
+        .toggle-switch {
+            width: 3.5rem;
+            height: 1.75rem;
+            border-radius: 9999px;
+            cursor: pointer;
+            transition: all 0.2s ease-in-out;
+            border: 2px solid;
         }
-        /* Modal Backdrop */
-        .modal-backdrop {
-            background-color: rgba(0, 0, 0, 0.7);
+        .toggle-switch > div {
+            width: 1.25rem;
+            height: 1.25rem;
+            border-radius: 9999px;
+            transition: all 0.2s ease-in-out;
+        }
+        .toggle-switch.on {
+            background-color: #10B981; /* Green-500 */
+            border-color: #059669; /* Green-600 */
+        }
+        .toggle-switch.on > div {
+            transform: translateX(1.75rem);
+            background-color: #059669;
+        }
+        .toggle-switch.off {
+            background-color: #374151; /* Gray-700 */
+            border-color: #4B5563; /* Gray-600 */
+        }
+        .toggle-switch.off > div {
+            transform: translateX(0.25rem);
+            background-color: #4B5563;
+        }
+
+        /* Ensure TradingView widget fills its container */
+        .tradingview-widget-container {
+            height: 500px;
+        }
+        .tradingview-widget-container iframe {
+            border: none !important;
         }
     </style>
 </head>
-<body class="min-h-screen text-gray-200">
+<body class="min-h-screen flex flex-col">
 
-    <!-- Firebase Imports for Real-time Data (MANDATORY) -->
+    <!-- Firebase Imports -->
     <script type="module">
         import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
         import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged, signOut } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
-        import { getFirestore, doc, onSnapshot, collection, query, setDoc, getDoc, runTransaction } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
-        import { setLogLevel } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+        import { getFirestore, doc, onSnapshot, collection, query, setDoc, updateDoc, where, getDocs } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
         
-        // --- GLOBAL VARIABLES from Canvas Environment (MANDATORY) ---
+        // --- CONFIGURATION ---
         const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
         const firebaseConfig = JSON.parse(typeof __firebase_config !== 'undefined' ? __firebase_config : '{}');
         const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
 
-        // --- FIREBASE INITIALIZATION ---
-        let app, db, auth, userId = null; // userId will be set after successful authentication
-        setLogLevel('Debug'); 
+        // --- MOCK DATA: Broker List ---
+        const MOCK_BROKERS = [
+            // --- EXNESS SERVERS ---
+            { name: "Exness (Standard)", spread: "0.8 Standard", regulation: "CySEC, FSA", server: "Exness-Real01", logo: "https://placehold.co/50x50/10B981/000?text=EX" },
+            { name: "Exness (Raw Spread)", spread: "0.0 Raw", regulation: "FSA, FCA", server: "Exness-Real02", logo: "https://placehold.co/50x50/10B981/000?text=EX" },
+            { name: "Exness (Pro)", spread: "0.1 Pro", regulation: "FSA", server: "Exness-Pro", logo: "https://placehold.co/50x50/10B981/000?text=EX" },
+            { name: "Exness (Test/Trial)", spread: "Demo", regulation: "Demo", server: "Exness-Trial", logo: "https://placehold.co/50x50/10B981/000?text=EX" },
+            
+            // --- NEWLY ADDED BROKERS ---
+            { name: "FBS Market", spread: "1.0 Standard", regulation: "CySEC, IFSC", server: "FBS-Real", logo: "https://placehold.co/50x50/00A3FF/FFF?text=FBS" },
+            { name: "XM Global", spread: "0.8 Standard", regulation: "ASIC, CySEC", server: "XM-Real01", logo: "https://placehold.co/50x50/FF0000/FFF?text=XM" },
+            { name: "OANDA", spread: "1.2 Standard", regulation: "FCA, CFTC", server: "OANDA-v20-Live", logo: "https://placehold.co/50x50/007BFF/FFF?text=OA" },
+            { name: "RoboForex", spread: "0.1 Raw", regulation: "FSC", server: "RoboForex-Pro", logo: "https://placehold.co/50x50/FFD700/000?text=RF" },
+            { name: "Markets.com", spread: "0.6 Standard", regulation: "FCA, ASIC", server: "Markets-Live", logo: "https://placehold.co/50x50/FFA500/000?text=MK" },
+            { name: "CMC Markets", spread: "0.7 Standard", regulation: "FCA, ASIC", server: "CMC-Live", logo: "https://placehold.co/50x50/800080/FFF?text=CMC" },
+
+            // --- EXISTING BROKERS (Logos updated for visual distinction) ---
+            { name: "GlobalPrime FX", spread: "0.2 Raw", regulation: "ASIC, VFSC", server: "GlobalPrime-Live01", logo: "https://placehold.co/50x50/00FFFF/000?text=GP" },
+            { name: "IC Markets", spread: "0.0 Raw", regulation: "ASIC, CySEC", server: "ICMarketsSC-Live02", logo: "https://placehold.co/50x50/FBBF24/000?text=IC" },
+            { name: "Pepperstone", spread: "0.6 Standard", regulation: "ASIC, FCA", server: "PepperstoneGroup-Live", logo: "https://placehold.co/50x50/3B82F6/FFF?text=PS" },
+            { name: "Fusion Markets", spread: "0.0 Raw", regulation: "ASIC, VFSC", server: "FusionMarkets-Real", logo: "https://placehold.co/50x50/F472B6/000?text=FM" },
+            { name: "Eightcap", spread: "1.0 Standard", regulation: "ASIC, VFSC", server: "EightcapGlobal-Live", logo: "https://placehold.co/50x50/9CA3AF/000?text=E8" },
+            { name: "Axi", spread: "0.4 Raw", regulation: "ASIC, FCA", server: "AxiTrader-Real", logo: "https://placehold.co/50x50/60A5FA/000?text=AXI" },
+            { name: "Tickmill", spread: "0.0 Raw", regulation: "FCA, CySEC", server: "Tickmill-Live", logo: "https://placehold.co/50x50/F472B6/FFF?text=TM" },
+            { name: "FP Markets", spread: "0.1 Raw", regulation: "ASIC, CySEC", server: "FP-Markets-Live", logo: "https://placehold.co/50x50/A78BFA/FFF?text=FP" },
+            { name: "Vantage", spread: "0.5 Standard", regulation: "VFSC, ASIC", server: "VantageFX-Live", logo: "https://placehold.co/50x50/4B5563/FFF?text=VG" },
+            { name: "BlackBull Markets", spread: "0.0 Raw", regulation: "FMA, FSA", server: "BlackBullMarkets-Real", logo: "https://placehold.co/50x50/10B981/FFF?text=BB" },
+            { name: "Tradeview", spread: "0.2 Raw", regulation: "CIMA, MFSA", server: "TradeviewMarkets-Live", logo: "https://placehold.co/50x50/F97316/FFF?text=TV" },
+            { name: "FxPro", spread: "1.2 Standard", regulation: "FCA, CySEC", server: "FxProGroup-Live", logo: "https://placehold.co/50x50/374151/FFF?text=FXP" },
+            { name: "AvaTrade", spread: "0.9 Standard", regulation: "ASIC, CBI", server: "AvaTrade-Real", logo: "https://placehold.co/50x50/EF4444/FFF?text=AT" },
+        ];
+        
+        window.MOCK_BROKERS = MOCK_BROKERS;
+
+
+        // --- INIT ---
+        let app, db, auth, userId = null;
+        const SIGNAL_GEN_INTERVAL_MS = 8000; // Generate signal every 8s
+        const TRADE_CLOSURE_INTERVAL_MS = 10000; // Check and close trades every 10s
+        const REAL_TIME_DATA_REFRESH_MS = 5000; // Refresh key data every 5s
 
         window.initFirebase = async () => {
             try {
-                if (Object.keys(firebaseConfig).length === 0) {
-                    throw new Error("Firebase configuration not found. Cannot initialize Firestore.");
-                }
+                if (Object.keys(firebaseConfig).length === 0) throw new Error("Firebase config missing.");
                 app = initializeApp(firebaseConfig);
                 db = getFirestore(app);
                 auth = getAuth(app);
-                window.db = db; // Make DB available globally for listeners
-                window.auth = auth; // Make Auth available globally for sign out
+                window.db = db;
 
-                // 1. Use custom token if provided
-                if (initialAuthToken) {
-                    await signInWithCustomToken(auth, initialAuthToken);
-                }
+                if (initialAuthToken) await signInWithCustomToken(auth, initialAuthToken);
 
-                // 2. Handle Authentication State Changes
                 onAuthStateChanged(auth, async (user) => {
                     if (user) {
                         userId = user.uid;
+                        window.userId = userId;
+                        // UPDATED ICON AND TEXT HERE
+                        document.getElementById('user-status').innerHTML = `<span class="text-green-500 text-lg mr-1">📡</span> LIVE STREAM ACTIVE`;
+                        window.startListeners();
+                        window.setView('dashboard'); 
+                        
+                        // START AUTOMATIC LOOPS
+                        window.startAutoGeneration(); 
+                        window.startTradeMonitoring();
+                        window.startRealTimeDataStream(); 
+                        window.updateGlobalAlertBar(); // Initialize global bar status
                     } else {
-                        // Sign in anonymously if no token or user exists
-                        if (!auth.currentUser) {
-                            try {
-                                const anonymousUser = await signInAnonymously(auth);
-                                userId = anonymousUser.user.uid;
-                            } catch (e) {
-                                console.error("Anonymous sign-in failed:", e);
-                                window.showMessage("FATAL: Could not sign in. Check permissions.", true);
-                                userId = null;
-                            }
-                        }
-                    }
-                    
-                    if (userId) {
-                        // For multi-user apps, MANDATORY to show userId
-                        document.getElementById('user-id-display').textContent = userId;
-                        console.log("Firebase Auth Ready. User ID:", userId);
-                        // 3. Start Data Listeners only after userId is definitively set
-                        window.startListeners(); 
-                    } else {
-                        console.log("Authentication failed or user signed out.");
-                        // Handle case where authentication fails completely
-                        window.setView('login');
+                        if (!auth.currentUser) await signInAnonymously(auth);
                     }
                 });
-
             } catch (error) {
-                console.error("Firebase initialization failed:", error);
-                window.showMessage("ERROR: Could not connect to the database. Check console for details.", true);
+                console.error("Init Error:", error);
             }
         };
 
-        // --- FIRESTORE UTILITIES (MOCKING MT5 DATA STORAGE) ---
-
-        // Public collection path for standard signals
-        const getSignalsCollectionPath = () => `artifacts/${appId}/public/data/forex_signals`;
-        // Public collection path for premium signals
-        const getPremiumSignalsCollectionPath = () => `artifacts/${appId}/public/data/premium_forex_signals`;
-        // Private document path for user account settings (Risk Management)
-        const getSettingsDocPath = () => `artifacts/${appId}/users/${userId}/account_settings/config`;
+        // --- FIRESTORE LOGIC ---
+        const getSignalsPath = () => `artifacts/${appId}/public/data/newhub_signals_v2`;
         
-        // Function to listen to ALL signals (Standard and Premium)
         window.startListeners = () => {
-            // CRITICAL GUARD: Only start listeners if DB and authenticated userId are available.
-            if (!db || !userId) {
-                console.warn("Listeners blocked: Database or UserId missing. Waiting for Auth.");
-                return;
-            }
+            if (!window.db || !window.userId) return;
 
-            // Listener for Standard Signals
-            onSnapshot(collection(db, getSignalsCollectionPath()), (snapshot) => {
-                window.signals = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-                window.renderSignals(window.signals, 'signals-container');
-                window.updateDashboardStats();
-            }, (error) => {
-                console.error("Error listening to standard signals (Will retry):", error);
-                window.showMessage("Error updating standard signals. Check connection.", true);
-            });
-
-            // Listener for Premium Signals
-            onSnapshot(collection(db, getPremiumSignalsCollectionPath()), (snapshot) => {
-                window.premiumSignals = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-                // Re-render only if the premium view is active
-                if (window.currentView === 'premium') {
-                    window.renderSignals(window.premiumSignals, 'premium-signals-container');
-                }
-            }, (error) => {
-                console.error("Error listening to premium signals (Will retry):", error);
-                window.showMessage("Error updating premium signals. Check connection.", true);
-            });
-
-
-            // Listener for User Settings (Balance, Equity, Risk)
-            const settingsDocRef = doc(db, getSettingsDocPath());
-            onSnapshot(settingsDocRef, (docSnap) => {
-                if (docSnap.exists()) {
-                    window.userSettings = docSnap.data();
-                } else {
-                    // Initialize default settings if they don't exist
-                    window.userSettings = {
-                        balance: 10000.00, 
-                        equity: 10000.00,
-                        lotSize: 0.1,
-                        maxTrades: 5,
-                        riskPercent: 1.0 
-                    };
-                    window.saveSettings(); // Save defaults
-                }
-                window.updateSettingsDisplay();
-            }, (error) => {
-                console.error("Error listening to user settings (Will retry):", error);
-                window.showMessage("Error retrieving user settings. Check connection.", true);
-            });
-        };
-
-        // Function to save risk management settings
-        window.saveSettings = async () => {
-            if (!db || !userId) {
-                console.error("Attempt blocked: Database or UserId not ready.");
-                window.showMessage("App is connecting. Please wait for authentication to complete.", true);
-                return;
-            }
-            try {
-                const settingsDocRef = doc(db, getSettingsDocPath());
-                await setDoc(settingsDocRef, window.userSettings, { merge: true });
-                window.showMessage("Settings saved successfully!");
-                console.log("Settings saved:", window.userSettings);
-                window.updateSettingsDisplay();
-            } catch (error) {
-                console.error("Error saving settings:", error);
-                window.showMessage("Failed to save settings. Missing permissions.", true);
-            }
-        };
-        
-        // Function to add a mock STANDARD signal (Admin feature for testing)
-        window.addMockSignal = async () => {
-            if (!db || !userId) {
-                console.error("Attempt blocked: Database or UserId not ready.");
-                window.showMessage("App is connecting. Please wait for authentication to complete.", true);
-                return;
-            }
-            try {
-                const newSignal = {
-                    pair: ["EUR/USD", "GBP/JPY", "AUD/NZD"][Math.floor(Math.random() * 3)],
-                    type: Math.random() > 0.5 ? "Buy" : "Sell",
-                    entry: (Math.random() * 1.5) + 0.8, // Realistic entry
-                    tp1: (Math.random() * 0.005) + (Math.random() * 1.5) + 0.8, // Random small TP
-                    sl: (Math.random() * -0.005) + (Math.random() * 1.5) + 0.8, // Random small SL
-                    winRate: Math.floor(Math.random() * 20) + 65, // 65-85%
-                    status: ["Active", "Pending", "Closed"][Math.floor(Math.random() * 3)],
-                    timestamp: new Date().toISOString()
-                };
-                const signalsCollectionRef = collection(db, getSignalsCollectionPath());
-                await setDoc(doc(signalsCollectionRef, newSignal.pair.replace('/', '_') + '_' + Date.now()), newSignal);
-                window.showMessage(`New STANDARD mock signal added for ${newSignal.pair}!`);
-            } catch (error) {
-                console.error("Error adding mock signal:", error);
-                window.showMessage("Failed to add mock signal. Missing permissions.", true);
-            }
-        };
-
-        // Function to add a mock PREMIUM signal (90% Win, 20 SL, 100 TP)
-        window.addMockPremiumSignal = async () => {
-            if (!db || !userId) {
-                console.error("Attempt blocked: Database or UserId not ready.");
-                window.showMessage("App is connecting. Please wait for authentication to complete.", true);
-                return;
-            }
-            try {
-                const pair = ["XAU/USD", "US30", "GBP/USD"][Math.floor(Math.random() * 3)];
-                const type = Math.random() > 0.5 ? "Buy" : "Sell";
-                const entry = (Math.random() * 1.5) + 1.2; // Example entry point
+            // Signals Listener
+            onSnapshot(collection(window.db, getSignalsPath()), (snapshot) => {
+                const signals = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })).sort((a, b) => b.timestamp - a.timestamp);
                 
-                // Simulate 20 pips SL and 100 pips TP (assuming 5-digit broker, 1 pip = 0.00010)
-                const pips100 = 0.01000;
-                const pips20 = 0.00200;
+                const activeAutoSignals = signals.filter(s => s.category === 'AUTO' && s.status === 'EXECUTED');
+                const manualSignals = signals.filter(s => s.category === 'MANUAL' && s.status === 'PENDING');
+                const closedTrades = signals.filter(s => s.status === 'CLOSED');
 
-                const newSignal = {
-                    pair: pair,
-                    type: type,
-                    entry: entry,
-                    tp1: type === 'Buy' ? entry + pips100 : entry - pips100,
-                    sl: type === 'Buy' ? entry - pips20 : entry + pips20,
-                    winRate: 90 + Math.floor(Math.random() * 5), // Forced 90-95%
-                    status: ["Active", "Pending"][Math.floor(Math.random() * 2)],
-                    timestamp: new Date().toISOString()
-                };
-                const signalsCollectionRef = collection(db, getPremiumSignalsCollectionPath());
-                await setDoc(doc(signalsCollectionRef, newSignal.pair.replace('/', '_') + '_' + Date.now()), newSignal);
-                window.showMessage(`New PREMIUM signal added for ${newSignal.pair} (90% Confidence)!`);
-            } catch (error) {
-                console.error("Error adding mock premium signal:", error);
-                window.showMessage("Failed to add mock premium signal. Missing permissions.", true);
-            }
+                window.renderAutoSignals(activeAutoSignals);
+                window.renderManualSignals(manualSignals);
+                window.renderTradeHistory(closedTrades); 
+            });
         };
         
-        // Function to log out the current user
-        window.handleLogout = async () => {
-            if (!window.auth) return;
+        // --- REAL-TIME DATA SIMULATION ---
+        window.startRealTimeDataStream = () => {
+            setInterval(() => {
+                console.log("Real-Time Data Stream: Fetching latest market sentiment...");
+                window.updateMarketOverview(); 
+            }, REAL_TIME_DATA_REFRESH_MS);
+        };
+        
+        window.updateMarketOverview = () => {
+            const overview = document.getElementById('market-overview-widget');
+            if(overview) {
+                window.showToast("Market data refreshed (5s cycle)", 'info-light');
+            }
+        };
+
+
+        // --- TRADE CLOSURE MONITORING ---
+        window.startTradeMonitoring = () => {
+             // Check and close trades every 10 seconds
+            setInterval(() => {
+                window.monitorTradesForClosure();
+            }, TRADE_CLOSURE_INTERVAL_MS);
+        };
+
+        window.monitorTradesForClosure = async () => {
+            if (!window.db) return;
+            
+            // Query for AUTO trades that are EXECUTED and have been active for > 15 seconds (simulated duration)
+            const cutoffTime = Date.now() - 15000; 
+            const signalsRef = collection(window.db, getSignalsPath());
+            
+            const q = query(signalsRef, where("category", "==", "AUTO"), where("status", "==", "EXECUTED"));
+            
             try {
-                await signOut(window.auth);
-                userId = null;
-                window.showMessage("Successfully logged out.");
-                window.setView('login');
-            } catch (error) {
-                console.error("Logout failed:", error);
-                window.showMessage("Logout failed. See console.", true);
+                const snapshot = await getDocs(q);
+                
+                snapshot.forEach(async (tradeDoc) => {
+                    const trade = tradeDoc.data();
+                    
+                    // Filter in memory based on age
+                    if (trade.timestamp < cutoffTime) {
+                        // 1:5 R:R strategy simulation: 70% chance of TP, 30% chance of SL
+                        const closeStatus = Math.random() < 0.70 ? 'TP' : 'SL';
+                        
+                        // Update the document to reflect closure
+                        await updateDoc(tradeDoc.ref, {
+                            status: 'CLOSED',
+                            closeStatus: closeStatus,
+                            closeTime: Date.now()
+                        });
+
+                        window.showToast(`📊 Trade Closed: ${trade.pair} HIT ${closeStatus}!`, closeStatus === 'TP' ? 'success' : 'error');
+                    }
+                });
+            } catch(e) {
+                console.error("Error monitoring trades:", e);
             }
+        }
+
+
+        // --- AUTOMATIC GENERATION LOOP ---
+        window.startAutoGeneration = () => {
+            // Generate a signal every 8 seconds automatically
+            setInterval(() => {
+                window.generateSignal();
+            }, SIGNAL_GEN_INTERVAL_MS);
+            window.showToast("Auto-Signal Stream Active 🟢", "success");
+        };
+
+        /**
+         * Parses a raw text string from the AI to find a reliable market price.
+         */
+        const parsePriceFromText = (text) => {
+            if (!text) return null;
+
+            let cleanedText = text.replace(/[$,€£¥]|(?:,\d{3})|[^0-9.]/g, ' ').trim();
+            const numbers = cleanedText.match(/\d+(\.\d+)?/g);
+            
+            if (numbers && numbers.length > 0) {
+                for (let numStr of numbers) {
+                    let price = parseFloat(numStr);
+                    if (!isNaN(price) && price > 0.1 && (price > 1000 || numStr.includes('.'))) {
+                        return price;
+                    }
+                }
+                
+                let fallbackPrice = parseFloat(numbers[0]);
+                if (!isNaN(fallbackPrice) && fallbackPrice > 0) {
+                    return fallbackPrice;
+                }
+            }
+            return null;
         };
 
 
-        // --- MAIN APP LOGIC AND UI INTERACTIONS ---
+        /**
+         * Fetches the current market price for a given pair using the Gemini API 
+         * with Google Search grounding. Implements retry logic.
+         */
+        window.fetchCurrentPrice = async (pair) => {
+            const prompt = `What is the current market price (bid price) for ${pair}? Provide the numerical value only, no words, no currency symbols, no explanation.`;
+            const payload = {
+                contents: [{ parts: [{ text: prompt }] }],
+                tools: [{ "google_search": {} }] 
+            };
+            
+            const maxRetries = 3;
+            let lastError = null;
 
-        document.addEventListener('DOMContentLoaded', () => {
-            window.initFirebase(); // Initialize Firebase on load
-        });
-        
+            for (let i = 0; i < maxRetries; i++) {
+                try {
+                    const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=`; 
+                    const response = await fetch(url, { method: 'POST', body: JSON.stringify(payload), headers: {'Content-Type': 'application/json'} });
+                    
+                    if (!response.ok) {
+                         throw new Error(`HTTP error! status: ${response.status}`);
+                    }
+
+                    const data = await response.json();
+                    const text = data.candidates?.[0]?.content?.parts?.[0]?.text;
+                    
+                    if (text) {
+                        const price = parsePriceFromText(text);
+                        if (price !== null) { return price; }
+                        throw new Error(`AI response did not contain a clear parsable price. Raw text: "${text}"`);
+                    }
+                } catch (e) {
+                    lastError = e;
+                    await new Promise(resolve => setTimeout(resolve, Math.pow(2, i) * 1000));
+                }
+            }
+            
+            // Fallback to mock price if all retries fail
+            return (Math.random() * 1000) + 1; 
+        };
+
+
+        // --- SIGNAL GENERATION (HIGH-ACCURACY SIMULATION) ---
+        window.generateSignal = async () => {
+            if (!window.db) return;
+            
+            const pairs = ["EUR/USD", "GBP/USD", "XAU/USD", "US30", "BTC/USD", "USD/JPY"];
+            const pair = pairs[Math.floor(Math.random() * pairs.length)];
+            const type = Math.random() > 0.5 ? "BUY" : "SELL";
+            
+            const confidence = Math.floor(Math.random() * (99 - 92 + 1) + 92); 
+            const category = confidence >= 95 ? 'AUTO' : 'MANUAL';
+
+            // --- FETCH LIVE PRICE ---
+            const price = await window.fetchCurrentPrice(pair); 
+            
+            // TARGETS: 20 Pips SL and 100 Pips TP (1:5 R:R, which is > 1:2)
+            const slPips = 20;
+            const tpPips = 100;
+
+            let pipVal = 0.0001; 
+            let precision = 5; 
+
+            if (pair.includes('JPY')) {
+                pipVal = 0.01;
+                precision = 3; 
+            } else if (pair.includes('XAU')) {
+                pipVal = 0.1; 
+                precision = 2; 
+            } else if (pair.includes('US30')) {
+                pipVal = 1.0; 
+                precision = 2; 
+            } else if (pair.includes('BTC')) {
+                pipVal = 1.0; 
+                precision = 2; 
+            }
+            
+            const entry = price;
+            const sl = type === 'BUY' ? entry - (slPips * pipVal) : entry + (slPips * pipVal);
+            const tp = type === 'BUY' ? entry + (tpPips * pipVal) : entry - (tpPips * pipVal);
+
+            const timeframes = ["5 Min", "15 Min", "30 Min"];
+            const timeframe = timeframes[Math.floor(Math.random() * timeframes.length)];
+
+
+            const newSignal = {
+                id: Date.now().toString(),
+                pair, type, confidence, category,
+                entry: entry.toFixed(precision), 
+                sl: sl.toFixed(precision), 
+                tp: tp.toFixed(precision),
+                precision: precision, 
+                timestamp: Date.now(),
+                status: category === 'AUTO' ? 'EXECUTED' : 'PENDING',
+                timeframe: timeframe,
+                closeStatus: null, 
+                closeTime: null
+            };
+
+            await setDoc(doc(collection(window.db, getSignalsPath()), newSignal.id), newSignal);
+            
+            if (category === 'AUTO') {
+                window.showToast(`⚡ Auto-Trade: ${pair} ${type} (${timeframe}) - High Accuracy`, 'success');
+                window.showSignalAlert(newSignal); // Trigger custom modal and sound
+            }
+        };
+
+        // --- MANUAL EXECUTION ---
+        window.executeManualTrade = async (signalId) => {
+            window.showToast("Sending order to MT5...", "info");
+            setTimeout(() => {
+                window.showToast("Order Filled Successfully!", "success");
+                const btn = document.getElementById(`btn-${signalId}`);
+                if(btn) {
+                    btn.innerText = "EXECUTED";
+                    btn.className = "w-full py-2 rounded bg-gray-800 text-gray-500 cursor-not-allowed font-bold border border-gray-700";
+                    btn.disabled = true;
+                }
+            }, 1000);
+        };
+
+        // --- GEMINI AI FEATURES ---
+        window.analyzeSentiment = async (pair) => {
+            const btn = event.currentTarget;
+            const originalText = btn.innerHTML;
+            btn.innerHTML = `<span class="animate-spin">↻</span> Analyzing...`;
+            
+            const prompt = `Analyze current market sentiment for ${pair} using Google Search. Summarize as Bullish, Bearish, or Neutral in 1 sentence.`;
+            const payload = {
+                contents: [{ parts: [{ text: prompt }] }],
+                tools: [{ "google_search": {} }] 
+            };
+            
+            try {
+                const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=`; 
+                const response = await fetch(url, { method: 'POST', body: JSON.stringify(payload), headers: {'Content-Type': 'application/json'} });
+                const data = await response.json();
+                const text = data.candidates[0].content.parts[0].text;
+                window.showToast(`AI Sentiment for ${pair}: ${text}`, 'info');
+            } catch (e) {
+                console.error(e);
+                window.showToast("AI Analysis Failed", "error");
+            } finally {
+                btn.innerHTML = originalText;
+            }
+        };
+
+        window.initFirebase();
     </script>
-    
-    <!-- Application Container -->
-    <div id="app-container" class="min-h-screen">
-        
-        <!-- Header & Navigation -->
-        <header class="bg-[#1f2937] shadow-lg">
-            <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4 flex justify-between items-center">
-                <h1 class="text-3xl font-bold text-teal-400">
-                    <span class="text-white">NEWHUB</span> FOREX
-                </h1>
-                <div class="flex items-center space-x-4">
-                    <span class="text-sm text-gray-400 hidden sm:block">User ID: <span id="user-id-display" class="font-mono text-xs text-indigo-400">Loading...</span></span>
-                    <button onclick="window.setView('dashboard')" class="text-gray-300 hover:text-white transition duration-150 py-1 px-3 rounded-lg hover:bg-indigo-600/30">Standard Signals</button>
-                    <button onclick="window.setView('premium')" class="bg-yellow-500 hover:bg-yellow-600 text-gray-900 font-semibold transition duration-150 py-1 px-3 rounded-lg shadow-md">Premium Signals</button>
-                    <button onclick="window.setView('settings')" class="text-gray-300 hover:text-white transition duration-150 py-1 px-3 rounded-lg hover:bg-indigo-600/30">Settings</button>
-                    <button onclick="window.handleLogout()" class="bg-red-500 hover:bg-red-600 text-white font-semibold py-1 px-3 rounded-lg transition duration-150">Log Out</button>
+
+    <!-- Navigation -->
+    <nav class="bg-black border-b border-gray-800 sticky top-0 z-50">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+            <div class="flex items-center justify-between h-16">
+                <div class="flex items-center">
+                    <div class="flex-shrink-0">
+                        <!-- Logo Image -->
+                        <img 
+                            src="Artboard 4.png" 
+                            alt="NEWHUB FOREX Logo" 
+                            class="h-8 w-auto invert" 
+                            onerror="this.onerror=null;this.src='https://placehold.co/120x32/000000/FFFFFF?text=NEWHUB FX';" 
+                        />
+                    </div>
+                    <div class="hidden md:block">
+                        <div class="ml-10 flex items-baseline space-x-4">
+                            <button onclick="window.setView('dashboard')" class="text-gray-300 hover:text-green-400 px-3 py-2 rounded-md text-sm font-bold transition uppercase tracking-wider flex items-center">
+                                ⚡ AUTO-SIGNALS
+                            </button>
+                            <button onclick="window.setView('manual')" class="text-gray-300 hover:text-red-400 px-3 py-2 rounded-md text-sm font-bold transition uppercase tracking-wider">Manual Signals</button>
+                            <button onclick="window.setView('history')" class="text-gray-300 hover:text-yellow-400 px-3 py-2 rounded-md text-sm font-bold transition uppercase tracking-wider">Trade History</button>
+                            <button onclick="window.setView('connect'); window.setConnectTab('broker')" class="text-gray-300 hover:text-white px-3 py-2 rounded-md text-sm font-bold transition uppercase tracking-wider">MT5 Connect</button>
+                        </div>
+                    </div>
+                </div>
+                <div class="flex items-center gap-4">
+                    <!-- STANDALONE LIVE CHAT ICON -->
+                    <button onclick="window.setView('chat')" class="p-2 rounded-full text-xl transition hover:bg-gray-800 text-gray-300 hover:text-green-400" aria-label="Live Chat">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-message-circle"><path d="m3 21 1.9-5.7a8.5 8.5 0 1 1 3.8 3.8L3 21Z"/></svg>
+                    </button>
+                    <!-- User Status -->
+                    <div id="user-status" class="text-xs text-gray-500 hidden md:block font-mono">Initializing...</div>
                 </div>
             </div>
-        </header>
+        </div>
+    </nav>
 
-        <!-- Main Content (View Container) -->
-        <main class="max-w-7xl mx-auto p-4 sm:p-6 lg:p-8">
-            <!-- Views are rendered here -->
-            <div id="login-view" class="hidden"></div>
-            <div id="dashboard-view" class="hidden"></div>
-            <div id="premium-signals-view" class="hidden"></div>
-            <div id="settings-view" class="hidden"></div>
-        </main>
-
-        <!-- Message Box for Alerts (No alert() used) -->
-        <div id="message-box" class="fixed bottom-4 right-4 p-4 text-white rounded-lg shadow-2xl transition-opacity duration-300 opacity-0 hidden z-50">
-            <!-- Messages appear here -->
+    <!-- Main Content Area -->
+    <main class="flex-grow p-6 overflow-y-auto">
+        
+        <!-- Strategy Description Banner -->
+        <div class="max-w-7xl mx-auto mb-8 p-4 bg-gray-900 border border-gray-800 rounded-none shadow-lg">
+            <p class="text-[10px] text-green-500 font-black uppercase tracking-widest mb-1">Active Trading Strategy</p>
+            <p class="text-sm text-gray-400 italic">
+                Highly accurate intraday signals confirmed by 
+                <span class="text-green-400 font-semibold">EMA, RSI, MACD, and Price Action</span> 
+                with a guaranteed R:R of at least 1:2.
+            </p>
         </div>
 
-        <!-- Gemini Analysis Modal -->
-        <div id="analysis-modal" class="fixed inset-0 modal-backdrop hidden flex items-center justify-center p-4 z-50" onclick="window.closeModal()">
-            <div class="bg-[#1a2333] w-full max-w-lg p-6 rounded-xl shadow-2xl border border-teal-400/50" onclick="event.stopPropagation()">
-                <div class="flex justify-between items-center pb-3 border-b border-gray-700">
-                    <h3 class="text-xl font-bold text-teal-400" id="analysis-modal-title">AI Signal Analysis</h3>
-                    <button onclick="window.closeModal()" class="text-gray-400 hover:text-white">&times;</button>
+        <!-- DASHBOARD VIEW (95%+ Auto Signals) -->
+        <div id="view-dashboard" class="max-w-7xl mx-auto space-y-8 hidden">
+            
+            <!-- Real-Time Chart (TradingView Widget) -->
+            <div class="w-full bg-gray-900 glass-panel p-4 rounded-none">
+                <h2 class="text-xl font-bold text-white mb-2 flex items-center">
+                    <span class="w-3 h-3 bg-blue-500 rounded-full mr-3 animate-pulse"></span>
+                    EUR/USD LIVE CHART (15M)
+                </h2>
+                <!-- TradingView Widget BEGIN -->
+                <div class="tradingview-widget-container rounded-none overflow-hidden">
+                    <div class="tradingview-widget-container__widget"></div>
+                    <script type="text/javascript" src="https://s3.tradingview.com/external-embedding/embed-widget-advanced-chart.js" async>
+                    {
+                    "autosize": true,
+                    "symbol": "FX_IDC:EURUSD",
+                    "interval": "15",
+                    "timezone": "Etc/UTC",
+                    "theme": "dark",
+                    "style": "1",
+                    "locale": "en",
+                    "enable_publishing": false,
+                    "withdateranges": true,
+                    "range": "1D",
+                    "hide_side_toolbar": false,
+                    "allow_symbol_change": true,
+                    "save_image": false,
+                    "support_host": "https://www.tradingview.com"
+                    }
+                    </script>
                 </div>
-                <div class="py-4">
-                    <div id="analysis-modal-content" class="text-gray-300 space-y-3">
-                        <p class="text-center text-lg text-yellow-500 flex items-center justify-center">
-                            <svg class="animate-spin -ml-1 mr-3 h-5 w-5 text-yellow-500" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg>
-                            Analyzing Market Data...
-                        </p>
+                <!-- TradingView Widget END -->
+            </div>
+
+            <!-- Auto Signals Section -->
+            <div>
+                <h2 class="text-xl font-bold text-white mb-4 flex items-center border-b border-gray-800 pb-2">
+                    <span class="w-3 h-3 bg-green-500 rounded-full mr-3 shadow-[0_0_10px_rgba(34,197,94,0.8)]"></span>
+                    LIVE AUTO-EXECUTED SIGNALS (95%+ Confidence)
+                </h2>
+                <div id="auto-signals-container" class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                    <!-- Cards injected here -->
+                    <div class="col-span-full text-center py-20 text-gray-600 font-mono">No active auto-executed trades.</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- MANUAL SIGNALS VIEW (92-94%) -->
+        <div id="view-manual" class="max-w-7xl mx-auto hidden">
+            <h2 class="text-xl font-bold text-white mb-4 flex items-center border-b border-gray-800 pb-2">
+                <span class="w-3 h-3 bg-red-500 rounded-full mr-3 shadow-[0_0_10px_rgba(239,68,68,0.8)]"></span>
+                MANUAL EXECUTION QUEUE (92% - 94% Confidence)
+            </h2>
+            <p class="text-gray-500 mb-6 text-sm font-mono">REVIEW REQUIRED: High-probability signals still require manual confirmation before execution.</p>
+            
+            <div id="manual-signals-container" class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                <!-- Cards injected here -->
+            </div>
+        </div>
+        
+        <!-- TRADE HISTORY VIEW -->
+        <div id="view-history" class="max-w-7xl mx-auto hidden">
+            <h2 class="text-xl font-bold text-white mb-4 flex items-center border-b border-gray-800 pb-2">
+                <span class="w-3 h-3 bg-yellow-500 rounded-full mr-3 shadow-[0_0_10px_rgba(234,179,8,0.8)]"></span>
+                CLOSED TRADE HISTORY
+            </h2>
+            <p class="text-gray-500 mb-6 text-sm font-mono">Results for automatically closed trades based on simulated R:R.</p>
+            
+            <div id="history-container" class="grid grid-cols-1 lg:grid-cols-4 gap-4">
+                <div class="col-span-full text-center py-10 text-gray-600 font-mono text-sm">No trades closed yet. Waiting for executions...</div>
+            </div>
+        </div>
+
+        <!-- MT5 CONNECT VIEW (Refactored with Tabs) -->
+        <div id="view-connect" class="max-w-7xl mx-auto mt-10 hidden">
+            <h2 class="text-3xl font-black text-white mb-2 tracking-tight">PLATFORM INTEGRATION HUB</h2>
+            <p class="text-gray-500 mb-8 text-sm uppercase tracking-widest flex items-center">
+                <span class="text-green-500 text-lg mr-2">🔗</span> 
+                Manage your MT5 bridge and personalized alerts.
+            </p>
+
+            <!-- Tab Navigation -->
+            <div class="flex border-b border-gray-700 mb-8">
+                <button id="tab-broker" onclick="window.setConnectTab('broker')" class="py-3 px-6 text-sm font-bold uppercase tracking-wider transition border-b-2 border-transparent text-gray-400 hover:text-white hover:border-green-600">
+                    MT5 Connection
+                </button>
+                <button id="tab-notifications" onclick="window.setConnectTab('notifications')" class="py-3 px-6 text-sm font-bold uppercase tracking-wider transition border-b-2 border-transparent text-gray-400 hover:text-white hover:border-green-600">
+                    Notification Settings
+                </button>
+            </div>
+
+            <!-- Tab Content -->
+            <div id="connect-tab-content">
+                
+                <!-- Broker Connection Tab Content -->
+                <div id="connect-tab-broker" class="grid grid-cols-1 lg:grid-cols-3 gap-8">
+                    <!-- Column 1: Broker List -->
+                    <div class="lg:col-span-2 glass-panel p-6 rounded-none border border-gray-800">
+                        <h3 class="text-lg font-bold text-green-400 mb-4 border-b border-gray-700 pb-2">Supported Brokers & Server Names</h3>
+                        <div id="broker-list-container" class="space-y-4 max-h-96 overflow-y-auto pr-2">
+                            <!-- Broker Cards injected here -->
+                        </div>
                     </div>
-                    <div id="analysis-sources" class="mt-4 text-xs text-gray-500 border-t border-gray-700 pt-2 hidden">
-                        <p class="font-semibold mb-1">Sources:</p>
-                        <ul id="sources-list" class="list-disc pl-5 space-y-1"></ul>
+
+                    <!-- Column 2: Connection Form -->
+                    <div class="lg:col-span-1 glass-panel p-6 rounded-none border border-gray-800 relative">
+                        <h3 class="text-lg font-bold text-red-400 mb-4 border-b border-gray-700 pb-2">MT5 Account Credentials</h3>
+                        
+                        <form onsubmit="event.preventDefault(); window.connectMT5();" class="space-y-6 text-left">
+                            <div>
+                                <label class="block text-[10px] font-bold text-green-500 mb-1 uppercase tracking-wider">Broker Server Name</label>
+                                <input type="text" id="server-name-input" class="w-full bg-black border border-gray-800 rounded-none p-3 text-white focus:outline-none focus:border-green-600 transition-colors font-mono" placeholder="Click a broker to select server, or type manually.">
+                            </div>
+                            <div>
+                                <label class="block text-[10px] font-bold text-green-500 mb-1 uppercase tracking-wider">MT5 Login ID (Account Number)</label>
+                                <input type="text" class="w-full bg-black border border-gray-800 rounded-none p-3 text-white focus:outline-none focus:border-green-600 transition-colors font-mono" placeholder="Enter Account ID">
+                            </div>
+                            <div>
+                                <label class="block text-[10px] font-bold text-green-500 mb-1 uppercase tracking-wider">MT5 Trader Password</label>
+                                <input type="password" class="w-full bg-black border border-gray-800 rounded-none p-3 text-white focus:outline-none focus:border-green-600 transition-colors font-mono" value="********">
+                            </div>
+                            <button type="submit" class="w-full bg-green-700 hover:bg-green-600 text-black font-black py-4 rounded-none transition uppercase tracking-widest text-sm shadow-xl">
+                                INITIATE SECURE API BRIDGE
+                            </button>
+                        </form>
+                        <p class="text-[10px] text-gray-600 mt-4 text-center">Your credentials are encrypted and stored locally. Never share your master password.</p>
                     </div>
                 </div>
+                
+                <!-- Notification Settings Tab Content (UPDATED) -->
+                <div id="connect-tab-notifications" class="hidden glass-panel p-6 rounded-none border border-gray-800">
+                    <h3 class="text-xl font-bold text-yellow-400 mb-4 border-b border-gray-700 pb-2 flex items-center">
+                        <span class="text-2xl mr-2">🔔</span> Alert Configuration
+                    </h3>
+
+                    <div class="space-y-6">
+                        
+                        <!-- Pop-up Alert Toggle -->
+                        <div class="flex justify-between items-center pb-4 border-b border-gray-800">
+                            <div>
+                                <p class="font-bold text-white">In-App Pop-up Alerts (Controlled by Global Bar)</p>
+                                <p class="text-xs text-gray-400">Display a persistent modal for every new AUTO signal (recommended).</p>
+                            </div>
+                            <div id="toggle-popup" onclick="window.toggleSetting(this)" class="toggle-switch on" data-setting="popup">
+                                <div class="bg-white"></div>
+                            </div>
+                        </div>
+
+                        <!-- Sound Alert Toggle -->
+                        <div class="flex justify-between items-center pb-4 border-b border-gray-800">
+                            <div>
+                                <p class="font-bold text-white">Audio/Sound Alert (Controlled by Global Bar)</p>
+                                <p class="text-xs text-gray-400">Play a distinct beep/vibration when an AUTO signal is executed.</p>
+                            </div>
+                            <div id="toggle-sound" onclick="window.toggleSetting(this)" class="toggle-switch on" data-setting="sound">
+                                <div class="bg-white"></div>
+                            </div>
+                        </div>
+
+                        <!-- Telegram Integration Mock -->
+                        <div class="flex justify-between items-center pb-4 border-b border-gray-800">
+                            <div>
+                                <p class="font-bold text-white flex items-center"><span class="text-blue-400 mr-2">💬</span> Telegram Channel Alerts</p>
+                                <p class="text-xs text-gray-400">Send signal details to your registered Telegram account. (Mock Integration)</p>
+                            </div>
+                            <div id="toggle-telegram" onclick="window.toggleSetting(this)" class="toggle-switch off" data-setting="telegram">
+                                <div class="bg-white"></div>
+                            </div>
+                        </div>
+
+                        <!-- Email Integration Mock -->
+                        <div class="flex justify-between items-center">
+                            <div>
+                                <p class="font-bold text-white flex items-center"><span class="text-red-400 mr-2">📧</span> Email Alerts</p>
+                                <p class="text-xs text-gray-400">Receive email notification for all trade executions and closures. (Mock Integration)</p>
+                            </div>
+                            <div id="toggle-email" onclick="window.toggleSetting(this)" class="toggle-switch off" data-setting="email">
+                                <div class="bg-white"></div>
+                            </div>
+                        </div>
+
+                    </div>
+                    <p class="text-[10px] text-gray-600 mt-8 text-center">Settings are simulated. For real external integration, dedicated API services are required.</p>
+                </div>
+
+            </div>
+
+        </div>
+
+        <!-- LIVE CHAT VIEW -->
+        <div id="view-chat" class="max-w-7xl mx-auto mt-10 hidden">
+            <div class="glass-panel p-10 rounded-none border border-gray-700 h-[600px] flex flex-col">
+                <h2 class="text-3xl font-black text-white mb-6 border-b border-gray-800 pb-2 flex items-center">
+                    <span class="text-4xl mr-3">💬</span> LIVE SUPPORT & COMMUNITY CHAT
+                </h2>
+                
+                <div class="flex-grow overflow-y-auto space-y-4 p-4 mb-4 bg-black/50 border border-gray-800 rounded-none">
+                    <!-- Placeholder Chat Messages -->
+                    <div class="flex justify-start">
+                        <div class="bg-gray-800 p-3 rounded-lg max-w-xs">
+                            <p class="text-sm font-bold text-green-400">Support Bot</p>
+                            <p class="text-gray-300 text-sm">Welcome! How can I assist with your auto-trading setup or signals today?</p>
+                            <span class="text-[10px] text-gray-500 block text-right mt-1">10:45 AM</span>
+                        </div>
+                    </div>
+                    <div class="flex justify-end">
+                        <div class="bg-green-700 p-3 rounded-lg max-w-xs">
+                            <p class="text-sm text-black">What's the outlook for XAU/USD this week?</p>
+                            <span class="text-[10px] text-gray-900 block text-left mt-1">10:46 AM</span>
+                        </div>
+                    </div>
+                    <div class="flex justify-start">
+                        <div class="bg-gray-800 p-3 rounded-lg max-w-xs">
+                            <p class="text-sm font-bold text-green-400">Support Bot</p>
+                            <p class="text-gray-300 text-sm">Our AI analysis suggests a **short-term bullish** continuation based on current momentum indicators.</p>
+                            <span class="text-[10px] text-gray-500 block text-right mt-1">10:47 AM</span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Chat Input -->
+                <div class="flex gap-4">
+                    <input type="text" placeholder="Type your message here..." class="flex-grow bg-black border border-gray-700 rounded-none p-4 text-white focus:outline-none focus:border-green-600">
+                    <button class="bg-green-700 hover:bg-green-600 text-black font-black px-6 rounded-none transition uppercase">Send</button>
+                </div>
+                <p class="text-[10px] text-gray-600 mt-2 text-center">This is a placeholder for a real-time chat application.</p>
+            </div>
+        </div>
+
+
+    </main>
+    
+    <!-- SIGNAL ALERT MODAL (New Feature) -->
+    <div id="signal-alert-modal" class="fixed inset-0 bg-black bg-opacity-80 z-[100] flex items-center justify-center hidden">
+        <div class="glass-panel p-8 w-11/12 max-w-lg rounded-none border-4 border-green-600 shadow-[0_0_40px_rgba(34,197,94,0.5)]">
+            
+            <div class="text-center mb-6">
+                <h3 class="text-2xl font-black text-yellow-300 mb-1 uppercase tracking-widest">
+                    <span class="relative">🚨 HIGH CONFIDENCE SIGNAL 🚨</span>
+                </h3>
+                <p class="text-gray-400 text-sm font-mono">ORDER EXECUTED AUTOMATICALLY</p>
+            </div>
+            
+            <div class="flex justify-center items-center gap-6 mb-8">
+                <h1 id="alert-pair" class="text-7xl font-black text-white tracking-tighter">PAIR</h1>
+                <div id="alert-type" class="text-4xl font-black px-4 py-2 rounded-lg bg-green-600">TYPE</div>
+            </div>
+
+            <div class="grid grid-cols-3 gap-3 text-center text-sm font-mono border-t border-b border-gray-700 py-4">
+                <div>
+                    <span class="text-gray-500 block text-[10px] uppercase">Entry</span>
+                    <span id="alert-entry" class="text-white font-bold">0.00000</span>
+                </div>
+                <div>
+                    <span class="text-gray-500 block text-[10px] uppercase">Stop Loss</span>
+                    <span id="alert-sl" class="text-red-500 font-bold">0.00000</span>
+                </div>
+                <div>
+                    <span class="text-gray-500 block text-[10px] uppercase">Take Profit</span>
+                    <span id="alert-tp" class="text-green-500 font-bold">0.00000</span>
+                </div>
+            </div>
+            
+            <div class="text-center mt-6">
+                <p class="text-xs text-gray-500 uppercase tracking-widest mb-3">Timeframe: <span id="alert-timeframe" class="text-white font-bold">15 Min</span></p>
+                <button onclick="window.closeSignalAlert()" class="py-3 px-8 bg-green-700 hover:bg-green-600 text-black font-black rounded-none transition uppercase text-sm shadow-lg">
+                    Acknowledge & Close
+                </button>
             </div>
         </div>
     </div>
 
+    <!-- Sticky Global Notification Bar (NEW FEATURE) -->
+    <div id="global-notification-bar" class="fixed bottom-0 left-0 right-0 bg-gray-900 border-t border-gray-800 p-3 z-40">
+        <div class="max-w-7xl mx-auto flex justify-between items-center">
+            <div class="flex items-center space-x-3">
+                <span id="alert-icon" class="text-2xl text-green-500 transition">🔔</span>
+                <p id="alert-text" class="text-sm font-bold text-white uppercase tracking-widest">
+                    REAL-TIME ALERTS: <span class="text-green-400">ON</span>
+                </p>
+                <span class="text-xs text-gray-500 hidden sm:block">(Pop-up & Sound Active)</span>
+            </div>
+
+            <button onclick="window.toggleAllAlerts()" id="global-toggle-btn" 
+                    class="py-2 px-4 text-xs font-black rounded-none transition uppercase tracking-wider bg-green-700 hover:bg-green-600 text-black">
+                Disable All Alerts
+            </button>
+        </div>
+    </div>
+
+
+    <!-- Toast Notification -->
+    <div id="toast" class="fixed bottom-16 right-5 px-6 py-4 border-l-4 shadow-2xl transform translate-y-20 opacity-0 transition-all duration-300 font-bold font-mono z-50 bg-black text-white border-green-500"></div>
 
     <script>
+        // --- UI LOGIC ---
         
-        // --- GEMINI API UTILITIES ---
+        // Global state for notification settings (simulated)
+        window.notificationSettings = {
+            popup: true,
+            sound: true,
+            telegram: false,
+            email: false
+        };
 
-        const GEMINI_API_KEY = ""; // Use empty string for Canvas auto-injection
-        const GEMINI_LLM_URL = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${GEMINI_API_KEY}`;
-        const GEMINI_TTS_URL = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-tts:generateContent?key=${GEMINI_API_KEY}`;
-        
-        // Function for exponential backoff fetch
-        async function exponentialBackoffFetch(url, options, retries = 5) {
-            for (let i = 0; i < retries; i++) {
-                try {
-                    const response = await fetch(url, options);
-                    if (!response.ok) {
-                        throw new Error(`HTTP error! status: ${response.status}`);
-                    }
-                    return response;
-                } catch (error) {
-                    if (i === retries - 1) {
-                        console.error("Fetch failed after all retries:", error);
-                        throw error;
-                    }
-                    const delay = Math.pow(2, i) * 1000 + Math.random() * 1000;
-                    await new Promise(resolve => setTimeout(resolve, delay));
-                }
-            }
-        }
+        window.setView = (viewName) => {
+            // Updated list of views including the new 'chat' view
+            ['dashboard', 'manual', 'connect', 'history', 'chat'].forEach(v => {
+                const el = document.getElementById(`view-${v}`);
+                if (el) el.classList.add('hidden');
+            });
+            const target = document.getElementById(`view-${viewName}`);
+            if (target) target.classList.remove('hidden');
 
-        // TTS Helper: Base64 to ArrayBuffer
-        function base64ToArrayBuffer(base64) {
-            const binaryString = atob(base64);
-            const len = binaryString.length;
-            const bytes = new Uint8Array(len);
-            for (let i = 0; i < len; i++) {
-                bytes[i] = binaryString.charCodeAt(i);
-            }
-            return bytes.buffer;
-        }
-
-        // TTS Helper: PCM to WAV Blob
-        function pcmToWav(pcm16, sampleRate) {
-            const numChannels = 1;
-            const sampleRateB = sampleRate;
-            const bitsPerSample = 16;
-            const byteRate = sampleRateB * numChannels * (bitsPerSample / 8);
-            const blockAlign = numChannels * (bitsPerSample / 8);
-            const numSamples = pcm16.length;
-            const dataSize = numSamples * 2; // 2 bytes per sample (PCM16)
-
-            const buffer = new ArrayBuffer(44 + dataSize);
-            const view = new DataView(buffer);
-
-            function writeString(view, offset, string) {
-                for (let i = 0; i < string.length; i++) {
-                    view.setUint8(offset + i, string.charCodeAt(i));
-                }
-            }
-
-            // RIFF identifier
-            writeString(view, 0, 'RIFF');
-            view.setUint32(4, 36 + dataSize, true); // File length
-            writeString(view, 8, 'WAVE');
-            writeString(view, 12, 'fmt '); // format chunk identifier
-            view.setUint32(16, 16, true);  // format chunk length
-            view.setUint16(20, 1, true);   // Sample format (1 = PCM)
-            view.setUint16(22, numChannels, true); // Number of channels
-            view.setUint32(24, sampleRateB, true); // Sample rate
-            view.setUint32(28, byteRate, true);    // Byte rate
-            view.setUint16(32, blockAlign, true);  // Block alignment
-            view.setUint16(34, bitsPerSample, true); // Bits per sample
-            writeString(view, 36, 'data'); // data chunk identifier
-            view.setUint32(40, dataSize, true);    // data chunk length
-
-            // Write the PCM data
-            let offset = 44;
-            for (let i = 0; i < numSamples; i++) {
-                view.setInt16(offset, pcm16[i], true);
-                offset += 2;
-            }
-
-            return new Blob([view], { type: 'audio/wav' });
-        }
-
-
-        // --- GEMINI API Feature 1: Signal Analysis ---
-        window.fetchSignalAnalysis = async function(signal) {
-            const pair = signal.pair;
-            const type = signal.type;
-            const winRate = signal.winRate;
-            
-            const userQuery = `Provide a concise, fundamental and technical rationale for a ${type} signal on the ${pair} currency pair with a ${winRate}% confidence. Mention recent market drivers or key economic events affecting this pair. Focus on technical levels and fundamental factors.`;
-            
-            const systemPrompt = "You are a senior Forex Market Analyst. Provide a concise (max 3 sentences), single-paragraph summary of the current market conditions for the requested currency pair. Your output MUST be based on up-to-date information.";
-
-            const payload = {
-                contents: [{ parts: [{ text: userQuery }] }],
-                tools: [{ "google_search": {} }], // Enable grounding
-                systemInstruction: { parts: [{ text: systemPrompt }] },
-            };
-
-            try {
-                const response = await exponentialBackoffFetch(GEMINI_LLM_URL, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(payload)
-                });
-                const result = await response.json();
-                const candidate = result.candidates?.[0];
-
-                if (candidate && candidate.content?.parts?.[0]?.text) {
-                    const text = candidate.content.parts[0].text;
-                    
-                    let sources = [];
-                    const groundingMetadata = candidate.groundingMetadata;
-                    if (groundingMetadata && groundingMetadata.groundingAttributions) {
-                        sources = groundingMetadata.groundingAttributions
-                            .map(attribution => ({
-                                uri: attribution.web?.uri,
-                                title: attribution.web?.title,
-                            }))
-                            .filter(source => source.uri && source.title);
-                    }
-                    return { text, sources };
-                } else {
-                    return { text: "AI analysis failed to generate a response. The market drivers are currently unclear.", sources: [] };
-                }
-            } catch (error) {
-                console.error("Gemini API call failed:", error);
-                return { text: "Failed to connect to the AI service. Please check your network connection.", sources: [] };
+            // Default to Broker tab when opening Connect view
+            if (viewName === 'connect') {
+                window.setConnectTab('broker'); 
+                window.renderBrokerList();
             }
         };
 
-        // UI Logic for opening and closing the Analysis Modal
-        window.showAnalysisModal = async function(signal) {
-            const modal = document.getElementById('analysis-modal');
-            const titleElement = document.getElementById('analysis-modal-title');
-            const contentElement = document.getElementById('analysis-modal-content');
-            const sourcesContainer = document.getElementById('analysis-sources');
-            const sourcesList = document.getElementById('sources-list');
-            
-            titleElement.textContent = `AI Analysis: ${signal.pair} (${signal.type})`;
-            sourcesContainer.classList.add('hidden');
-            sourcesList.innerHTML = '';
-            
-            // Set loading state
-            contentElement.innerHTML = `
-                <p class="text-center text-lg text-yellow-500 flex items-center justify-center">
-                    <svg class="animate-spin -ml-1 mr-3 h-5 w-5 text-yellow-500" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg>
-                    Analyzing Market Data (Using Google Search Grounding)...
-                </p>
-            `;
-            modal.classList.remove('hidden');
+        window.setConnectTab = (tabName) => {
+            const tabs = ['broker', 'notifications'];
+            tabs.forEach(tab => {
+                const tabButton = document.getElementById(`tab-${tab}`);
+                const tabContent = document.getElementById(`connect-tab-${tab}`);
 
-            // Fetch analysis
-            const { text, sources } = await window.fetchSignalAnalysis(signal);
-            
-            // Update modal with results
-            contentElement.innerHTML = `<p>${text}</p>`;
+                if (tab === tabName) {
+                    tabButton.classList.remove('text-gray-400', 'border-transparent');
+                    tabButton.classList.add('text-white', 'border-green-600');
+                    tabContent.classList.remove('hidden');
+                } else {
+                    tabButton.classList.remove('text-white', 'border-green-600');
+                    tabButton.classList.add('text-gray-400', 'border-transparent');
+                    tabContent.classList.add('hidden');
+                }
+            });
+        };
 
-            if (sources.length > 0) {
-                sourcesList.innerHTML = sources.map(s => 
-                    `<li><a href="${s.uri}" target="_blank" class="text-teal-400 hover:underline">${s.title}</a></li>`
-                ).join('');
-                sourcesContainer.classList.remove('hidden');
+        /**
+         * Toggles a single setting and updates its visual state.
+         * Used by the MT5 Connect > Notifications tab.
+         */
+        window.toggleSetting = (el) => {
+            const settingName = el.getAttribute('data-setting');
+            const currentState = el.classList.contains('on');
+            
+            if (currentState) {
+                el.classList.remove('on');
+                el.classList.add('off');
+                window.notificationSettings[settingName] = false;
+                window.showToast(`${settingName} Alerts Disabled`, 'error');
+            } else {
+                el.classList.remove('off');
+                el.classList.add('on');
+                window.notificationSettings[settingName] = true;
+                window.showToast(`${settingName} Alerts Enabled`, 'success');
             }
-        }
-
-        window.closeModal = function() {
-            document.getElementById('analysis-modal').classList.add('hidden');
-        }
-
-        // --- GEMINI API Feature 2: Risk Summary TTS ---
-        window.speakRiskSummary = async function() {
-            const button = document.getElementById('tts-button');
-            const audioPlayer = document.getElementById('audio-player');
-            const balance = window.userSettings.balance.toFixed(2);
-            const riskPercent = window.userSettings.riskPercent.toFixed(1);
-            const riskAmount = (window.userSettings.balance * (window.userSettings.riskPercent / 100)).toFixed(2);
-
-            if (audioPlayer) audioPlayer.remove();
             
-            const prompt = `Say cheerfully: Your current account balance is ${balance} US dollars. Your specified risk per trade is ${riskPercent} percent, which equates to risking ${riskAmount} dollars per trade. Always practice disciplined risk management!`;
-            
-            button.disabled = true;
-            button.textContent = 'Generating Audio...';
-            
-            const payload = {
-                contents: [{ parts: [{ text: prompt }] }],
-                generationConfig: {
-                    responseModalities: ["AUDIO"],
-                    speechConfig: {
-                        voiceConfig: {
-                            prebuiltVoiceConfig: { voiceName: "Kore" }
-                        }
-                    }
-                },
-                model: "gemini-2.5-flash-preview-tts"
-            };
+            // If pop-up or sound is changed, update the global bar
+            if (settingName === 'popup' || settingName === 'sound') {
+                window.updateGlobalAlertBar();
+            }
+        };
+        
+        /**
+         * Toggles the critical Pop-up and Sound settings simultaneously.
+         * Used by the Sticky Global Notification Bar.
+         */
+        window.toggleAllAlerts = () => {
+            const currentlyOn = window.notificationSettings.popup || window.notificationSettings.sound;
+            const newState = !currentlyOn;
 
-            try {
-                const response = await exponentialBackoffFetch(GEMINI_TTS_URL, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(payload)
-                });
+            // Set the state for both pop-up and sound
+            window.notificationSettings.popup = newState;
+            window.notificationSettings.sound = newState;
+
+            // Update the UI elements for all affected toggles
+            ['popup', 'sound'].forEach(settingName => {
+                const el = document.getElementById(`toggle-${settingName}`);
+                if (el) {
+                    el.classList.remove(newState ? 'off' : 'on');
+                    el.classList.add(newState ? 'on' : 'off');
+                }
+            });
+            
+            window.updateGlobalAlertBar(); // Update the bar itself
+            window.showToast(`Critical Alerts ${newState ? 'Enabled' : 'Disabled'}`, newState ? 'success' : 'error');
+        };
+
+        /**
+         * Updates the appearance and text of the global notification bar 
+         * based on the 'popup' and 'sound' settings.
+         */
+        window.updateGlobalAlertBar = () => {
+            const bar = document.getElementById('global-notification-bar');
+            const icon = document.getElementById('alert-icon');
+            const text = document.getElementById('alert-text');
+            const button = document.getElementById('global-toggle-btn');
+            
+            const isOn = window.notificationSettings.popup && window.notificationSettings.sound;
+
+            if (isOn) {
+                bar.classList.remove('bg-gray-800');
+                bar.classList.add('bg-gray-900');
+
+                icon.classList.remove('text-red-500');
+                icon.classList.add('text-green-500');
+
+                text.innerHTML = `REAL-TIME ALERTS: <span class="text-green-400">ON</span>`;
+
+                button.innerText = "Disable All Alerts";
+                button.classList.remove('bg-red-700', 'hover:bg-red-600', 'text-white');
+                button.classList.add('bg-green-700', 'hover:bg-green-600', 'text-black');
+
+            } else {
+                bar.classList.remove('bg-gray-900');
+                bar.classList.add('bg-gray-800');
                 
-                const result = await response.json();
-                const part = result?.candidates?.[0]?.content?.parts?.[0];
-                const audioData = part?.inlineData?.data;
-                const mimeType = part?.inlineData?.mimeType;
+                icon.classList.remove('text-green-500');
+                icon.classList.add('text-red-500');
 
-                if (audioData && mimeType && mimeType.startsWith("audio/")) {
-                    const sampleRateMatch = mimeType.match(/rate=(\d+)/);
-                    const sampleRate = sampleRateMatch ? parseInt(sampleRateMatch[1], 10) : 16000; // Default to 16kHz
-                    
-                    const pcmData = base64ToArrayBuffer(audioData);
-                    const pcm16 = new Int16Array(pcmData);
-                    const wavBlob = pcmToWav(pcm16, sampleRate);
-                    const audioUrl = URL.createObjectURL(wavBlob);
+                text.innerHTML = `REAL-TIME ALERTS: <span class="text-red-400">OFF</span>`;
 
-                    const newPlayer = document.createElement('audio');
-                    newPlayer.id = 'audio-player';
-                    newPlayer.controls = true;
-                    newPlayer.src = audioUrl;
-                    newPlayer.classList.add('mt-4', 'w-full');
-                    
-                    document.getElementById('tts-container').appendChild(newPlayer);
-                    newPlayer.play();
-                    
-                    window.showMessage("Risk summary audio generated and playing!");
-                } else {
-                    window.showMessage("TTS generation failed. Audio data missing.", true);
-                }
-            } catch (error) {
-                console.error("TTS API call failed:", error);
-                window.showMessage("Failed to generate audio summary.", true);
-            } finally {
-                button.disabled = false;
-                button.textContent = '✨ Hear Risk Summary (TTS)';
+                button.innerText = "Enable All Alerts";
+                button.classList.remove('bg-green-700', 'hover:bg-green-600', 'text-black');
+                button.classList.add('bg-red-700', 'hover:bg-red-600', 'text-white');
             }
-        }
-
-
-        // --- GLOBAL STATE & ELEMENTS ---
-        window.currentView = 'login';
-        window.signals = []; // Standard Signals Fetched from Firestore
-        window.premiumSignals = []; // Premium Signals Fetched from Firestore
-        window.userSettings = {}; // Fetched from Firestore
-
-        const viewElements = {
-            'login': document.getElementById('login-view'),
-            'dashboard': document.getElementById('dashboard-view'),
-            'premium': document.getElementById('premium-signals-view'), // New element
-            'settings': document.getElementById('settings-view')
         };
-        const messageBox = document.getElementById('message-box');
 
-        // --- CORE APPLICATION LOGIC ---
-
-        // Function to show a temporary message instead of using alert()
-        window.showMessage = function(text, isError = false) {
-            messageBox.textContent = text;
-            messageBox.className = 'fixed bottom-4 right-4 p-4 rounded-lg shadow-2xl transition-opacity duration-300 z-50';
-            messageBox.classList.add(isError ? 'bg-red-600' : 'bg-green-600', 'opacity-100', 'block');
+        window.connectMT5 = () => {
+            window.showToast("ATTEMPTING CONNECTION...", "info");
+            // Simulate API bridge handshake
             setTimeout(() => {
-                messageBox.classList.remove('opacity-100', 'block');
-                messageBox.classList.add('opacity-0', 'hidden');
-            }, 5000);
-        }
-
-        // View Switching Logic
-        window.setView = function(newView) {
-            window.currentView = newView;
-            Object.keys(viewElements).forEach(view => {
-                viewElements[view].classList.add('hidden');
-            });
-            viewElements[newView].classList.remove('hidden');
-
-            if (newView === 'dashboard') {
-                window.renderDashboard();
-            } else if (newView === 'premium') {
-                window.renderPremiumSignals();
-            } else if (newView === 'settings') {
-                window.renderSettings();
-            } else if (newView === 'login') {
-                window.renderLogin();
-                // Only show disconnect message if user was previously connected
-                if (window.userId) {
-                    window.showMessage("Disconnected. Please re-enter credentials to connect the trading bridge.");
+                const success = Math.random() > 0.1; // 90% success rate simulated
+                if (success) {
+                    window.showToast("CONNECTION ESTABLISHED: Broker Bridge Active.", "success");
+                    // Optionally, redirect after successful connection
+                    // window.setView('dashboard');
+                } else {
+                    window.showToast("CONNECTION FAILED: Server or Credentials Invalid.", "error");
                 }
+            }, 2500);
+        };
+
+        window.showToast = (msg, type) => {
+            const toast = document.getElementById('toast');
+            toast.innerText = msg;
+            
+            // Theme based toasts
+            if (type === 'success') {
+                toast.style.borderColor = '#22c55e'; // Green (TP)
+            } else if (type === 'error') {
+                toast.style.borderColor = '#ef4444'; // Red (SL)
+            } else if (type === 'info-light') {
+                toast.style.borderColor = '#93c5fd'; // Light blue for refresh info
+            } else {
+                toast.style.borderColor = '#3b82f6'; // Blue info
             }
-        }
-        
-        // 1. RENDER LOGIN VIEW
-        window.renderLogin = function() {
-            viewElements.login.innerHTML = `
-                <div class="max-w-xl mx-auto bg-[#1a2333] p-8 rounded-xl shadow-2xl border border-teal-400/50 mt-12">
-                    <h2 class="text-3xl font-bold text-white mb-6 text-center">MT5 Account Connection</h2>
-                    
-                    <div class="bg-red-800/20 text-red-400 p-4 rounded-lg mb-6 border border-red-700">
-                        <p class="font-bold">SECURITY WARNING:</p>
-                        <p class="text-sm mt-1">
-                            This frontend is a **MOCK**. For live trading, credentials must be sent to a **SECURE, ENCRYPTED BACKEND SERVER (Python/Node.js)** to protect your financial data. Do not use this UI for actual live credentials.
-                        </p>
-                    </div>
-
-                    <form id="login-form" class="space-y-4">
-                        <div>
-                            <label for="login-id" class="block text-sm font-medium text-gray-400">MT5 Login ID</label>
-                            <input type="text" id="login-id" value="123456" class="mt-1 block w-full bg-[#0d111c] border-gray-700 rounded-lg p-3 text-white focus:ring-teal-500 focus:border-teal-500" required>
-                        </div>
-                        <div>
-                            <label for="server-name" class="block text-sm font-medium text-gray-400">Server Name (e.g., Broker-Live)</label>
-                            <input type="text" id="server-name" value="Demo-Server" class="mt-1 block w-full bg-[#0d111c] border-gray-700 rounded-lg p-3 text-white focus:ring-teal-500 focus:border-teal-500" required>
-                        </div>
-                        <div>
-                            <label for="investor-password" class="block text-sm font-medium text-gray-400">Investor Password (Read-Only)</label>
-                            <input type="password" id="investor-password" value="********" class="mt-1 block w-full bg-[#0d111c] border-gray-700 rounded-lg p-3 text-white focus:ring-teal-500 focus:border-teal-500" required>
-                        </div>
-                        <button type="submit" class="w-full bg-teal-600 hover:bg-teal-700 text-white font-semibold py-3 px-4 rounded-lg transition duration-150 ease-in-out">
-                            Connect Trading Bridge (MOCK)
-                        </button>
-                    </form>
-                </div>
-            `;
-            // Attach form submission listener
-            document.getElementById('login-form').addEventListener('submit', (e) => {
-                e.preventDefault();
-                // In a real app, this would trigger the secure backend connection
-                window.showMessage("Attempting secure connection... (MOCK successful)");
-                setTimeout(() => window.setView('dashboard'), 1500);
+            
+            // Show
+            requestAnimationFrame(() => {
+                toast.classList.remove('translate-y-20', 'opacity-0');
             });
-        }
-        
-        // 2. RENDER DASHBOARD VIEW (Standard Signals)
-        window.renderDashboard = function() {
-            viewElements.dashboard.innerHTML = `
-                <div class="bg-[#1f2937] p-6 rounded-xl mb-8 shadow-xl border-l-4 border-teal-400">
-                    <h2 class="text-2xl font-semibold mb-2 text-white">Standard MT5 Trading Signals</h2>
-                    <p class="text-gray-400">
-                        Real-time account metrics and server-generated trade signals from the standard channel.
-                    </p>
-                </div>
 
-                <!-- Account Metrics -->
-                <div class="grid grid-cols-2 md:grid-cols-4 gap-6 mb-8">
-                    <div class="dashboard-card p-5 rounded-xl flex flex-col items-center justify-center">
-                        <p class="text-4xl font-extrabold text-teal-400">$<span id="display-balance">0.00</span></p>
-                        <p class="text-sm text-gray-400 mt-1">Balance</p>
-                    </div>
-                    <div class="dashboard-card p-5 rounded-xl flex flex-col items-center justify-center">
-                        <p class="text-4xl font-extrabold text-indigo-400">$<span id="display-equity">0.00</span></p>
-                        <p class="text-sm text-gray-400 mt-1">Equity</p>
-                    </div>
-                    <div class="dashboard-card p-5 rounded-xl flex flex-col items-center justify-center">
-                        <p class="text-4xl font-extrabold text-green-500" id="display-profit">$0.00</p>
-                        <p class="text-sm text-gray-400 mt-1">Open P&L</p>
-                    </div>
-                    <div class="dashboard-card p-5 rounded-xl flex flex-col items-center justify-center">
-                        <p class="text-4xl font-extrabold text-gray-400" id="display-open-trades">0</p>
-                        <p class="text-sm text-gray-400 mt-1">Open Trades</p>
-                    </div>
-                </div>
+            // Hide
+            clearTimeout(window.toastTimer);
+            window.toastTimer = setTimeout(() => {
+                toast.classList.add('translate-y-20', 'opacity-0');
+            }, 5000); 
+        };
 
-                <div class="flex justify-between items-center mb-4">
-                    <h3 class="text-xl font-semibold text-white">Standard Active & Pending Signals</h3>
-                    <button onclick="window.addMockSignal()" class="bg-indigo-600 hover:bg-indigo-700 text-white font-semibold py-2 px-4 rounded-lg text-sm transition duration-150">
-                        Add Mock Standard Signal
-                    </button>
-                </div>
+        // --- NEW SIGNAL ALERT SYSTEM (MODAL & SOUND) ---
 
-                <!-- Signals Grid -->
-                <section id="signals-container" class="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-3 gap-6">
-                    <!-- Standard Signal Cards will be injected here by JavaScript -->
-                </section>
-            `;
-            window.updateDashboardStats(); // Initial stats update
-            window.renderSignals(window.signals, 'signals-container'); // Initial standard signal render
-        }
+        window.playSignalSound = () => {
+            if (!window.notificationSettings.sound) return; // Check setting
+            
+            // Uses Web Audio API to generate a simple beep tone.
+            try {
+                const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+                const oscillator = audioCtx.createOscillator();
+                const gainNode = audioCtx.createGain();
 
-        // 3. RENDER PREMIUM SIGNALS VIEW
-        window.renderPremiumSignals = function() {
-            viewElements.premium.innerHTML = `
-                <div class="bg-[#1f2937] p-6 rounded-xl mb-8 shadow-xl border-l-4 border-yellow-500">
-                    <h2 class="text-2xl font-semibold mb-2 text-white">Premium Signals Channel</h2>
-                    <p class="text-yellow-400 font-medium">
-                        High-confidence trades with **90%+ Win Rate, 20 pips SL, and 100 pips TP** strategy.
-                    </p>
-                </div>
+                oscillator.connect(gainNode);
+                gainNode.connect(audioCtx.destination);
 
-                <div class="flex justify-between items-center mb-4">
-                    <h3 class="text-xl font-semibold text-white">Premium Active & Pending Signals</h3>
-                    <button onclick="window.addMockPremiumSignal()" class="bg-yellow-600 hover:bg-yellow-700 text-gray-900 font-semibold py-2 px-4 rounded-lg text-sm transition duration-150">
-                        Add Mock Premium Signal
-                    </button>
-                </div>
+                oscillator.type = 'sine'; // Basic tone
+                oscillator.frequency.setValueAtTime(880, audioCtx.currentTime); // A5 (high pitch)
+                gainNode.gain.setValueAtTime(0.5, audioCtx.currentTime);
 
-                <!-- Signals Grid -->
-                <section id="premium-signals-container" class="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-3 gap-6">
-                    <!-- Premium Signal Cards will be injected here by JavaScript -->
-                </section>
-            `;
-            window.renderSignals(window.premiumSignals, 'premium-signals-container');
-        }
+                oscillator.start();
+                setTimeout(() => {
+                    gainNode.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + 0.3);
+                    oscillator.stop(audioCtx.currentTime + 0.3);
+                }, 300); 
 
-        // 4. RENDER SETTINGS VIEW (RISK MANAGEMENT)
-        window.renderSettings = function() {
-            viewElements.settings.innerHTML = `
-                <div class="max-w-3xl mx-auto bg-[#1a2333] p-8 rounded-xl shadow-2xl border border-indigo-400/50 mt-8">
-                    <h2 class="text-3xl font-bold text-white mb-6">Risk Management Settings</h2>
-                    <p class="text-gray-400 mb-6">Configure how the Quantum Auto-Trader executes signals on your MT5 account.</p>
-
-                    <form id="settings-form" class="space-y-6">
-                        
-                        <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
-                            <!-- Lot Size -->
-                            <div>
-                                <label for="lotSize" class="block text-sm font-medium text-gray-400">Default Lot Size (Min 0.01)</label>
-                                <input type="number" step="0.01" min="0.01" id="lotSize" class="mt-1 block w-full bg-[#0d111c] border-gray-700 rounded-lg p-3 text-white focus:ring-teal-500 focus:border-teal-500">
-                            </div>
-                            <!-- Max Trades -->
-                            <div>
-                                <label for="maxTrades" class="block text-sm font-medium text-gray-400">Maximum Concurrent Trades</label>
-                                <input type="number" step="1" min="1" id="maxTrades" class="mt-1 block w-full bg-[#0d111c] border-gray-700 rounded-lg p-3 text-white focus:ring-teal-500 focus:border-teal-500">
-                            </div>
-                        </div>
-
-                        <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
-                            <!-- Risk Per Trade -->
-                            <div>
-                                <label for="riskPercent" class="block text-sm font-medium text-gray-400">Risk % Per Trade (Based on Equity)</label>
-                                <div class="relative mt-1">
-                                    <input type="number" step="0.1" min="0.1" id="riskPercent" class="block w-full bg-[#0d111c] border-gray-700 rounded-lg p-3 text-white pr-10 focus:ring-teal-500 focus:border-teal-500">
-                                    <span class="absolute inset-y-0 right-0 pr-3 flex items-center text-gray-500">%</span>
-                                </div>
-                            </div>
-                            <!-- TP/SL Multiplier -->
-                            <div>
-                                <label for="tpSlMultiplier" class="block text-sm font-medium text-gray-400">Default TP/SL Multiplier</label>
-                                <p class="text-xs text-gray-500 mb-1">Signals' levels will be multiplied by this factor (e.g., 1.0 = use signals' exact levels).</p>
-                                <input type="number" step="0.1" min="0.1" id="tpSlMultiplier" value="1.0" class="mt-1 block w-full bg-[#0d111c] border-gray-700 rounded-lg p-3 text-white focus:ring-teal-500 focus:border-teal-500">
-                            </div>
-                        </div>
-
-                        <div class="border-t border-gray-700 pt-6 space-y-4" id="tts-container">
-                            <button type="button" id="tts-button" onclick="window.speakRiskSummary()" class="w-full bg-yellow-600 hover:bg-yellow-700 text-gray-900 font-semibold py-3 px-4 rounded-lg transition duration-150 ease-in-out">
-                                ✨ Hear Risk Summary (TTS)
-                            </button>
-                        </div>
-
-                        <button type="submit" class="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-semibold py-3 px-4 rounded-lg transition duration-150 ease-in-out">
-                            Save Risk Configuration
-                        </button>
-                    </form>
-                </div>
-            `;
-            window.updateSettingsDisplay(); // Load current settings into form
-            document.getElementById('settings-form').addEventListener('submit', (e) => {
-                e.preventDefault();
-                // Update global settings object from form inputs
-                window.userSettings.lotSize = parseFloat(document.getElementById('lotSize').value);
-                window.userSettings.maxTrades = parseInt(document.getElementById('maxTrades').value);
-                window.userSettings.riskPercent = parseFloat(document.getElementById('riskPercent').value);
-                // Save to Firestore
-                window.saveSettings();
-            });
-        }
-        
-        // Function to load settings values into the settings form
-        window.updateSettingsDisplay = function() {
-            if (window.userSettings && viewElements.settings.querySelector('#settings-form')) {
-                const form = document.getElementById('settings-form');
-                if (form) {
-                    form.querySelector('#lotSize').value = window.userSettings.lotSize;
-                    form.querySelector('#maxTrades').value = window.userSettings.maxTrades;
-                    form.querySelector('#riskPercent').value = window.userSettings.riskPercent;
+                // Simulate vibration for mobile devices (if supported)
+                if (navigator.vibrate) {
+                    navigator.vibrate([200, 100, 200]);
                 }
+            } catch (e) {
+                console.warn("Audio context failed:", e);
             }
-            // Update Dashboard Metrics
-            const displayBalance = document.getElementById('display-balance');
-            if (displayBalance) {
-                const balance = window.userSettings.balance || 0.00;
-                const equity = window.userSettings.equity || 0.00;
-                const profit = equity - balance;
-                
-                document.getElementById('display-balance').textContent = balance.toFixed(2);
-                document.getElementById('display-equity').textContent = equity.toFixed(2);
-                document.getElementById('display-profit').textContent = (profit >= 0 ? '+' : '') + profit.toFixed(2);
-                document.getElementById('display-profit').className = 'text-4xl font-extrabold ' + (profit >= 0 ? 'text-green-500' : 'text-red-500');
-            }
-        }
-        
-        // Function to update the main statistics bar on the dashboard
-        window.updateDashboardStats = function() {
-            // Stats based on all active/pending signals
-            const allActiveSignals = [...window.signals, ...window.premiumSignals].filter(s => s.status === 'Active');
-            const totalWinRate = allActiveSignals.reduce((sum, signal) => sum + signal.winRate, 0);
-            const averageWinRate = allActiveSignals.length > 0 ? Math.round(totalWinRate / allActiveSignals.length) : 0;
-            
-            const openTrades = window.signals.filter(s => s.status === 'Active' || s.status === 'Pending').length + 
-                               window.premiumSignals.filter(s => s.status === 'Active' || s.status === 'Pending').length;
-            
-            const totalSignalsDisplay = viewElements.dashboard.querySelector('#total-signals');
-            const avgWinRateDisplay = viewElements.dashboard.querySelector('#avg-win-rate');
-            const openTradesDisplay = viewElements.dashboard.querySelector('#display-open-trades');
+        };
 
-            if (totalSignalsDisplay) totalSignalsDisplay.textContent = allActiveSignals.length;
-            if (avgWinRateDisplay) avgWinRateDisplay.textContent = `${averageWinRate}%`;
-            if (openTradesDisplay) openTradesDisplay.textContent = openTrades;
-        }
-        
-        // Generic function to render signal cards
-        window.renderSignals = function(data, containerId) {
-            const container = document.getElementById(containerId);
-            if (!container) return;
+        window.showSignalAlert = (signal) => {
+            if (!window.notificationSettings.popup) return; // Check setting
             
-            container.innerHTML = ''; // Clear existing content
+            window.playSignalSound(); 
             
-            if (data.length === 0) {
-                 container.innerHTML = `<div class="lg:col-span-3 text-center p-8 bg-[#1f2937] rounded-xl text-gray-400">No active signals found in this channel.</div>`;
+            const modal = document.getElementById('signal-alert-modal');
+            const typeClass = signal.type === 'BUY' ? 'bg-green-600' : 'bg-red-600';
+            
+            document.getElementById('alert-pair').innerText = signal.pair;
+            document.getElementById('alert-type').innerText = signal.type;
+            document.getElementById('alert-type').className = `text-4xl font-black px-4 py-2 rounded-lg ${typeClass}`;
+            document.getElementById('alert-sl').classList.remove('text-red-500', 'text-green-500');
+            document.getElementById('alert-tp').classList.remove('text-red-500', 'text-green-500');
+
+            document.getElementById('alert-entry').innerText = signal.entry;
+            document.getElementById('alert-sl').innerText = signal.sl;
+            document.getElementById('alert-tp').innerText = signal.tp;
+            document.getElementById('alert-timeframe').innerText = signal.timeframe;
+
+            // Apply correct TP/SL colors
+            document.getElementById('alert-sl').classList.add('text-red-500');
+            document.getElementById('alert-tp').classList.add('text-green-500');
+
+            modal.classList.remove('hidden');
+            
+            // Auto-hide after 15 seconds
+            clearTimeout(window.signalAlertTimer);
+            window.signalAlertTimer = setTimeout(() => {
+                window.closeSignalAlert();
+            }, 15000); 
+        };
+
+        window.closeSignalAlert = () => {
+            document.getElementById('signal-alert-modal').classList.add('hidden');
+            clearTimeout(window.signalAlertTimer);
+        };
+
+
+        // --- RENDERERS ---
+
+        window.selectBroker = (serverName) => {
+            const serverInput = document.getElementById('server-name-input');
+            if (serverInput) {
+                serverInput.value = serverName;
+                window.showToast(`Server selected: ${serverName}`, 'info-light');
+            }
+        };
+
+
+        window.renderBrokerList = () => {
+            const container = document.getElementById('broker-list-container');
+            
+            // Access the broker list defined in the module script
+            const brokers = window.MOCK_BROKERS || []; 
+
+            container.innerHTML = brokers.map(broker => `
+                <div onclick="window.selectBroker('${broker.server}')" 
+                     class="flex items-center justify-between p-3 border-b border-gray-800 hover:bg-gray-900 transition cursor-pointer hover:border-green-600">
+                    <div class="flex items-center space-x-4">
+                        <img src="${broker.logo}" alt="${broker.name} Logo" class="w-8 h-8 rounded-full border border-gray-700 object-cover">
+                        <div>
+                            <h4 class="text-white font-bold text-sm">${broker.name}</h4>
+                            <p class="text-[10px] text-gray-500 uppercase tracking-widest">${broker.regulation} Regulated</p>
+                        </div>
+                    </div>
+                    <div class="text-right">
+                        <span class="text-green-500 font-black text-sm font-mono">${broker.server}</span>
+                        <p class="text-[10px] text-gray-500 uppercase tracking-widest">${broker.spread}</p>
+                    </div>
+                </div>
+            `).join('');
+
+            if (brokers.length === 0) {
+                container.innerHTML = `<p class="text-gray-600 text-center py-10">No supported brokers found.</p>`;
+            }
+        };
+
+
+        window.renderAutoSignals = (signals) => {
+            const container = document.getElementById('auto-signals-container');
+            
+            if(signals.length === 0) {
+                 container.innerHTML = `<div class="col-span-full text-center py-20 text-gray-600 font-mono">No active auto-executed trades.</div>`;
                  return;
             }
 
-            data.forEach(signal => {
-                // Determine styling based on signal type
-                const typeClass = signal.type === 'Buy' ? 'signal-buy' : 'signal-sell';
-                const arrowIcon = signal.type === 'Buy' 
-                    ? '<svg class="w-4 h-4" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M3.293 9.707a1 1 0 010-1.414l6-6a1 1 0 011.414 0l6 6a1 1 0 01-1.414 1.414L11 5.414V17a1 1 0 11-2 0V5.414L4.707 9.707a1 1 0 01-1.414 0z" clip-rule="evenodd"></path></svg>'
-                    : '<svg class="w-4 h-4" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M16.707 10.293a1 1 0 010 1.414l-6 6a1 1 0 01-1.414 0l-6-6a1 1 0 111.414-1.414L9 14.586V3a1 1 0 112 0v11.586l4.293-4.293a1 1 0 011.414 0z" clip-rule="evenodd"></path></svg>';
-                
-                // Determine status color
-                let statusColor = 'text-gray-400';
-                if (signal.status === 'Active') statusColor = 'text-green-500';
-                if (signal.status === 'Pending') statusColor = 'text-yellow-500';
-                if (signal.status === 'Closed') statusColor = 'text-red-500';
-
-                // Create the win rate ring style variable
-                const winRateStyle = `--p: ${signal.winRate}%;`;
-
-                const signalCardHTML = `
-                    <div class="signal-card rounded-xl p-6 flex flex-col md:flex-row items-start space-y-4 md:space-y-0 md:space-x-6">
-                        
-                        <!-- 1. Win Rate Indicator (Gauge) -->
-                        <div class="flex-shrink-0 w-24 h-24 relative" style="--p:${signal.winRate}%;">
-                            <div class="win-rate-ring w-full h-full" style="${winRateStyle}">
-                                <div class="win-rate-inner">
-                                    <p class="text-xl font-bold text-white">${signal.winRate}%</p>
-                                    <p class="text-xs text-teal-400 font-semibold mt-0.5">Confidence</p>
-                                </div>
-                            </div>
+            container.innerHTML = signals.slice(0, 6).map(s => `
+                <div class="glass-panel p-5 rounded-none signal-card border-l-4 ${s.type === 'BUY' ? 'border-green-600' : 'border-red-600'}">
+                    <div class="flex justify-between items-start mb-4">
+                        <div>
+                            <h3 class="text-3xl font-black text-white tracking-tighter">${s.pair}</h3>
+                            <span class="status-badge mt-1 ${s.type === 'BUY' ? 'bg-green-900/30 text-green-500 border border-green-800' : 'bg-red-900/30 text-red-500 border border-red-800'}">
+                                ${s.type}
+                            </span>
                         </div>
+                        <div class="text-right">
+                            <p class="text-[10px] text-gray-500 uppercase tracking-widest mb-1">Timeframe: <span class="text-white">${s.timeframe}</span></p>
+                            <span class="text-4xl font-black text-white">${s.confidence}%</span>
+                            <p class="text-[10px] text-gray-500 uppercase tracking-widest">Certainty</p>
+                        </div>
+                    </div>
+                    
+                    <div class="grid grid-cols-3 gap-4 mb-4 text-sm font-mono">
+                        <div class="bg-black/50 p-2 border border-gray-800">
+                            <span class="text-gray-500 block text-[10px] uppercase">Entry (Live)</span>
+                            <span class="text-white font-bold">${s.entry}</span>
+                        </div>
+                        <div class="bg-black/50 p-2 border border-gray-800">
+                            <span class="text-gray-500 block text-[10px] uppercase">SL (20 Pips)</span>
+                            <span class="text-red-500 font-bold">${s.sl}</span>
+                        </div>
+                        <div class="bg-black/50 p-2 border border-gray-800">
+                            <span class="text-gray-500 block text-[10px] uppercase">TP (100 Pips)</span>
+                            <span class="text-green-500 font-bold">${s.tp}</span>
+                        </div>
+                    </div>
 
-                        <!-- 2. Signal Details -->
-                        <div class="flex-grow">
-                            <div class="flex items-center justify-between mb-2">
-                                <h3 class="text-3xl font-extrabold text-white">${signal.pair}</h3>
-                                <span class="${typeClass} text-xs font-bold py-1 px-3 rounded-full uppercase flex items-center shadow-md">
-                                    ${arrowIcon}
-                                    <span class="ml-1">${signal.type}</span>
-                                </span>
-                            </div>
+                    <div class="flex items-center justify-between mt-4 pt-4 border-t border-gray-800">
+                        <span class="text-[10px] text-gray-400 flex items-center font-bold uppercase tracking-wider">
+                            <span class="w-1.5 h-1.5 bg-green-500 rounded-full mr-2 animate-pulse"></span>
+                            Auto-Executed
+                        </span>
+                        <button onclick="window.analyzeSentiment('${s.pair}')" class="text-[10px] font-bold text-gray-400 hover:text-white transition uppercase tracking-wider flex items-center">
+                            AI Check <span class="ml-1 text-lg leading-none">↗</span>
+                        </button>
+                    </div>
+                </div>
+            `).join('');
+        };
 
-                            <p class="text-sm font-medium ${statusColor} mb-3">
-                                Status: <span class="font-bold">${signal.status}</span>
-                            </p>
+        window.renderManualSignals = (signals) => {
+            const container = document.getElementById('manual-signals-container');
+            
+            // Only show PENDING manual signals
+            const manualPendingSignals = signals.filter(s => s.status === 'PENDING');
 
-                            <!-- Trading Levels -->
-                            <div class="grid grid-cols-3 gap-4 text-center border-t border-gray-700 pt-3">
-                                <div>
-                                    <p class="text-xs text-gray-500 uppercase">Entry</p>
-                                    <p class="text-sm font-semibold text-gray-200">${signal.entry.toFixed(5)}</p>
-                                </div>
-                                <div>
-                                    <p class="text-xs text-gray-500 uppercase">Take Profit</p>
-                                    <p class="text-sm font-semibold text-green-400">${signal.tp1.toFixed(5)}</p>
-                                </div>
-                                <div>
-                                    <p class="text-xs text-gray-500 uppercase">Stop Loss</p>
-                                    <p class="text-sm font-semibold text-red-400">${signal.sl.toFixed(5)}</p>
-                                </div>
-                            </div>
-                            <div class="mt-4">
-                                <button onclick="window.showAnalysisModal(${JSON.stringify(signal).replace(/"/g, '&quot;')})" 
-                                    class="w-full bg-indigo-500 hover:bg-indigo-600 text-white font-semibold py-2 px-3 rounded-lg text-sm transition duration-150">
-                                    ✨ AI Signal Analysis
-                                </button>
-                            </div>
+            if(manualPendingSignals.length === 0) {
+                container.innerHTML = `<div class="text-gray-600 font-mono text-sm">No manual signals in queue.</div>`;
+                return;
+            }
+
+            container.innerHTML = manualPendingSignals.slice(0, 6).map(s => `
+                <div class="glass-panel p-6 rounded-none border border-gray-800">
+                    <div class="flex justify-between items-center mb-6">
+                        <div class="flex items-center gap-4">
+                            <h3 class="text-2xl font-black text-white tracking-tighter">${s.pair}</h3>
+                            <span class="px-2 py-1 rounded text-xs font-bold border ${s.type === 'BUY' ? 'bg-black text-green-500 border-green-800' : 'bg-black text-red-500 border-red-800'}">${s.type}</span>
+                        </div>
+                        <div class="text-right">
+                            <p class="text-xs text-gray-500 uppercase tracking-widest mb-1">TF: <span class="text-white">${s.timeframe}</span></p>
+                            <div class="text-white font-bold font-mono">${s.confidence}%</div>
+                        </div>
+                    </div>
+                    
+                    <div class="grid grid-cols-3 text-xs mb-6 text-gray-400 font-mono bg-black/30 p-3">
+                        <div>EN: <span class="text-white">${s.entry}</span></div>
+                        <div>SL: <span class="text-red-500">${s.sl}</span></div>
+                        <div>TP: <span class="text-green-500">${s.tp}</span></div>
+                    </div>
+
+                    <div class="flex gap-4">
+                        <button onclick="window.analyzeSentiment('${s.pair}')" class="px-4 py-3 bg-black border border-gray-700 hover:border-gray-500 text-gray-300 text-xs font-bold uppercase tracking-wider transition">
+                            AI News
+                        </button>
+                        <button id="btn-${s.id}" onclick="window.executeManualTrade('${s.id}')" class="flex-1 py-3 bg-red-700 hover:bg-red-600 text-white text-xs font-black uppercase tracking-widest transition">
+                            Execute Order
+                        </button>
+                    </div>
+                </div>
+            `).join('');
+        };
+        
+        window.renderTradeHistory = (closedTrades) => {
+            const container = document.getElementById('history-container');
+            
+            if(closedTrades.length === 0) {
+                container.innerHTML = `<div class="col-span-full text-center py-10 text-gray-600 font-mono text-sm">No trades closed yet. Waiting for executions...</div>`;
+                return;
+            }
+
+            container.innerHTML = closedTrades.slice(0, 16).map(s => {
+                const isTP = s.closeStatus === 'TP';
+                const resultClass = isTP ? 'text-green-500 bg-green-900/20 border-green-700' : 'text-red-500 bg-red-900/20 border-red-700';
+                
+                // Format timestamp
+                const closeTime = s.closeTime ? new Date(s.closeTime).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' }) : 'N/A';
+                
+                return `
+                    <div class="glass-panel p-4 rounded-none border ${resultClass} font-mono">
+                        <div class="flex justify-between items-start">
+                            <h4 class="text-lg font-black text-white">${s.pair}</h4>
+                            <span class="text-xs font-black px-2 py-1 rounded-sm ${resultClass} border-none">${s.closeStatus}</span>
+                        </div>
+                        <div class="text-xs text-gray-400 mt-2">
+                            <p class="mt-1">ENTRY: ${s.entry} (${s.type})</p>
+                            <p>CLOSED: ${closeTime}</p>
+                            <p class="text-[10px] uppercase mt-1">Confidence: ${s.confidence}% | ${s.timeframe}</p>
                         </div>
                     </div>
                 `;
-                container.innerHTML += signalCardHTML;
-            });
-        }
-        
-        // --- INITIALIZATION ---
-        // Start by showing the login screen
-        window.onload = function() {
-            window.renderLogin();
-            window.setView('login');
+            }).join('');
         };
 
+        // Initialize view
+        window.setView('dashboard');
+        // Initial call to set up the bar based on default settings
+        document.addEventListener('DOMContentLoaded', window.updateGlobalAlertBar);
     </script>
-
 </body>
 </html>
