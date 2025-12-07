@@ -1,625 +1,1315 @@
-import React, { useState, useEffect, useCallback } from 'react';
-import { initializeApp } from 'firebase/app';
-import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged, signOut } from 'firebase/auth';
-import { getFirestore, doc, setDoc, onSnapshot } from 'firebase/firestore';
-import { Power, Signal, User, Server, Cpu, ArrowUp, ArrowDown, Repeat, Zap, Shield, Eye, Settings, LogOut, Loader2, Send, TrendingUp, TrendingDown } from 'lucide-react';
-
-// --- Global Variables (Provided by Canvas Environment) ---
-const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
-const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {};
-const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
-
-// --- Firebase Initialization ---
-let app;
-let db;
-let auth;
-
-try {
-  app = initializeApp(firebaseConfig);
-  db = getFirestore(app);
-  auth = getAuth(app);
-} catch (error) {
-  console.error("Firebase Initialization Error:", error);
-}
-
-// Helper to handle authentication and setup
-const useFirebaseAuthState = () => {
-  const [userId, setUserId] = useState(null);
-  const [isAuthReady, setIsAuthReady] = useState(false);
-  const [error, setError] = useState(null);
-
-  useEffect(() => {
-    if (!auth) {
-      setError("Firebase Auth not initialized.");
-      setIsAuthReady(true);
-      return;
-    }
-
-    const signIn = async () => {
-      try {
-        if (initialAuthToken) {
-          await signInWithCustomToken(auth, initialAuthToken);
-        } else {
-          await signInAnonymously(auth);
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Scheduled Institutional Forex Signals & History</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@100..900&display=swap" rel="stylesheet">
+    <!-- Lucide Icons for visual elements -->
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <style>
+        /* Base styles for dark theme */
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #0d1117; /* Dark Theme Background */
+            color: #c9d1d9;
         }
-      } catch (e) {
-        console.error("Sign-in error:", e);
-        setError("Failed to sign in. Please try refreshing.");
-      }
-    };
-
-    const unsubscribe = onAuthStateChanged(auth, (user) => {
-      if (user) {
-        setUserId(user.uid);
-      } else {
-        setUserId(null);
-        signIn(); // Try to sign in again if not authenticated
-      }
-      setIsAuthReady(true);
-    });
-
-    return () => unsubscribe();
-  }, [initialAuthToken]);
-
-  return { userId, isAuthReady, error, authInstance: auth };
-};
-
-// --- Signal Simulation and Core Logic Mock ---
-
-// Pairs and Timeframes used for simulation
-const PAIRS = ['EURUSD', 'GBPUSD', 'AUDUSD', 'USDJPY', 'USDCAD', 'NZDUSD'];
-const TIMEFRAMES = ['M30', 'H1', 'H4'];
-
-const generateMockSignals = (count = 3) => {
-  const signals = [];
-  for (let i = 0; i < count; i++) {
-    const pair = PAIRS[Math.floor(Math.random() * PAIRS.length)];
-    const tf = TIMEFRAMES[Math.floor(Math.random() * TIMEFRAMES.length)];
-    const type = Math.random() > 0.5 ? 'BUY' : 'SELL';
-    const strength = Math.floor(Math.random() * 50) + 50; // 50% to 99%
-    const entry = (Math.random() * 0.05 + 1.1).toFixed(5);
-    const fixedSL = 30; // 30 pips fixed SL
-    const fixedTP = Math.random() > 0.5 ? 150 : 200; // 150-200 pips fixed TP
-
-    // Calculate actual SL/TP levels based on entry and type
-    let slLevel, tpLevel, rrRatio;
-    if (type === 'BUY') {
-      slLevel = (parseFloat(entry) - fixedSL / 10000).toFixed(5);
-      tpLevel = (parseFloat(entry) + fixedTP / 10000).toFixed(5);
-      rrRatio = (fixedTP / fixedSL).toFixed(1);
-    } else { // SELL
-      slLevel = (parseFloat(entry) + fixedSL / 10000).toFixed(5);
-      tpLevel = (parseFloat(entry) - fixedTP / 10000).toFixed(5);
-      rrRatio = (fixedTP / fixedSL).toFixed(1);
-    }
-
-    // Only filter high-probability trades (simulated by R:R >= 5.0)
-    if (parseFloat(rrRatio) >= 5.0) {
-      signals.push({
-        id: crypto.randomUUID(),
-        pair,
-        tf,
-        type,
-        entry,
-        sl: slLevel,
-        tp: tpLevel,
-        r: rrRatio,
-        strength: strength,
-        status: 'NEW', // NEW, EXECUTED, CONFIRMED, DENIED, HIT_TP, HIT_SL
-        timestamp: new Date().toLocaleTimeString(),
-      });
-    }
-  }
-  return signals;
-};
-
-// --- Firestore Access Hooks ---
-
-const MT4_SETTINGS_PATH = (userId) => `artifacts/${appId}/users/${userId}/settings/mt4_settings`;
-
-const useMT4Settings = (userId, isAuthReady) => {
-  const [settings, setSettings] = useState(null);
-  const [loading, setLoading] = useState(true);
-
-  useEffect(() => {
-    if (!isAuthReady || !userId || !db) {
-      setLoading(false);
-      return;
-    }
-
-    const docRef = doc(db, MT4_SETTINGS_PATH(userId));
-
-    const unsubscribe = onSnapshot(docRef, (docSnap) => {
-      if (docSnap.exists()) {
-        setSettings(docSnap.data());
-      } else {
-        setSettings(null);
-      }
-      setLoading(false);
-    }, (error) => {
-      console.error("Error fetching MT4 settings:", error);
-      setLoading(false);
-    });
-
-    return () => unsubscribe();
-  }, [userId, isAuthReady]);
-
-  const saveSettings = useCallback(async (newSettings) => {
-    if (!db || !userId) return;
-    const docRef = doc(db, MT4_SETTINGS_PATH(userId));
-    try {
-      await setDoc(docRef, newSettings, { merge: true });
-      // Using console.log instead of alert to adhere to instructions
-      console.log("MT4/MT5 settings saved successfully (Simulated).");
-    } catch (e) {
-      console.error("Error saving MT4 settings:", e);
-    }
-  }, [userId]);
-
-  return { settings, loading, saveSettings };
-};
-
-// --- Components ---
-
-const Notification = ({ children, type = 'info' }) => {
-  const baseClasses = "p-4 mb-4 rounded-lg flex items-center shadow-lg";
-  let colorClasses = "";
-
-  switch (type) {
-    case 'error':
-      colorClasses = "bg-red-900 text-red-300";
-      break;
-    case 'success':
-      colorClasses = "bg-green-800 text-green-300";
-      break;
-    case 'warning':
-      colorClasses = "bg-yellow-800 text-yellow-300";
-      break;
-    case 'info':
-    default:
-      colorClasses = "bg-blue-800 text-blue-300";
-  }
-
-  return <div className={`${baseClasses} ${colorClasses}`}>{children}</div>;
-};
-
-const SignalRow = ({ signal, mt4Connected, autoTrade, handleTradeAction }) => {
-  const isBuy = signal.type === 'BUY';
-  
-  // Updated statusColor to include TP/SL
-  const statusColor = {
-    NEW: 'bg-yellow-500',
-    EXECUTED: 'bg-green-500',
-    CONFIRMED: 'bg-indigo-500',
-    DENIED: 'bg-red-500',
-    HIT_TP: 'bg-cyan-500', // New color for TP
-    HIT_SL: 'bg-pink-500', // New color for SL
-  }[signal.status] || 'bg-gray-500';
-
-
-  // Logic for the action/status display column
-  let statusDisplay;
-
-  if (signal.status === 'NEW') {
-      // Action button or manual tag for new signals
-      statusDisplay = mt4Connected
-        ? (autoTrade
-          ? <Zap className="w-5 h-5 text-green-500" title="Auto-executed" />
-          : <button
-            onClick={() => handleTradeAction(signal.id, 'CONFIRMED')}
-            className="px-3 py-1 text-sm font-semibold rounded-full bg-indigo-600 hover:bg-indigo-700 transition duration-150"
-          >
-            Confirm Execute
-          </button>
-        ) : (
-          <span className="text-gray-500 text-xs flex items-center">
-            <Shield className="w-3 h-3 mr-1" /> Manual
-          </span>
-        );
-  } else if (signal.status === 'HIT_TP') {
-      statusDisplay = (
-          <span className="text-cyan-400 text-sm font-bold flex items-center">
-              <TrendingUp className="w-5 h-5 mr-1" /> TP HIT!
-          </span>
-      );
-  } else if (signal.status === 'HIT_SL') {
-      statusDisplay = (
-          <span className="text-pink-400 text-sm font-bold flex items-center">
-              <TrendingDown className="w-5 h-5 mr-1" /> SL HIT
-          </span>
-      );
-  } else {
-      // Default status tag (EXECUTED, CONFIRMED, DENIED)
-      statusDisplay = (
-        <div className="flex items-center space-x-1">
-            <span className={`w-3 h-3 rounded-full ${statusColor}`}></span>
-            <span className="text-xs font-medium text-gray-300">{signal.status}</span>
-        </div>
-      );
-  }
-
-  return (
-    <div className="grid grid-cols-12 gap-2 p-4 border-b border-gray-700 hover:bg-gray-800 transition duration-150 items-center">
-      {/* Pair & Timeframe */}
-      <div className="col-span-3 font-bold text-lg flex items-center space-x-2">
-        <span className={isBuy ? 'text-green-400' : 'text-red-400'}>
-          {isBuy ? <ArrowUp className="w-5 h-5" /> : <ArrowDown className="w-5 h-5" />}
-        </span>
-        <span className="truncate">{signal.pair}</span>
-        <span className="text-xs font-mono px-2 py-0.5 rounded bg-gray-600 text-gray-200">{signal.tf}</span>
-      </div>
-
-      {/* Entry / SL / TP */}
-      <div className="col-span-4 text-sm font-mono space-y-1">
-        <p className="flex justify-between">
-          <span className="text-gray-400">Entry:</span>
-          <span className="text-white font-semibold">{signal.entry}</span>
-        </p>
-        <p className="flex justify-between">
-          <span className="text-red-400">SL (30 pips):</span>
-          <span className="text-red-400">{signal.sl}</span>
-        </p>
-        <p className="flex justify-between">
-          <span className="text-green-400">TP ({signal.tp === '200' ? '200' : '150'} pips):</span>
-          <span className="text-green-400">{signal.tp}</span>
-        </p>
-      </div>
-
-      {/* R:R Ratio & Strength */}
-      <div className="col-span-2 text-center space-y-1">
-        <p className="font-semibold text-white">1:{signal.r}</p>
-        <p className={`text-xs font-medium px-2 py-0.5 rounded-full ${parseFloat(signal.r) >= 5 ? 'bg-emerald-800 text-emerald-300' : 'bg-orange-800 text-orange-300'}`}>
-          High Prob.
-        </p>
-      </div>
-
-      {/* Strength Bar */}
-      <div className="col-span-1 flex flex-col items-center">
-        <div className="text-xs text-gray-400 mb-1">{signal.strength}%</div>
-        <div className="w-full h-2 bg-gray-600 rounded-full overflow-hidden">
-          <div
-            className="h-full bg-gradient-to-r from-yellow-400 to-green-500 transition-all duration-500"
-            style={{ width: `${signal.strength}%` }}
-          ></div>
-        </div>
-      </div>
-
-      {/* Action / Status */}
-      <div className="col-span-2 flex flex-col items-end space-y-2">
-        {statusDisplay}
-        <span className="text-xs text-gray-500">{signal.timestamp}</span>
-      </div>
-    </div>
-  );
-};
-
-const MT4ConnectionModal = ({ mt4Settings, saveSettings, onClose }) => {
-  const [login, setLogin] = useState(mt4Settings?.login || '');
-  const [password, setPassword] = useState(mt4Settings?.password || '');
-  const [server, setServer] = useState(mt4Settings?.server || '');
-  const [autoTrade, setAutoTrade] = useState(mt4Settings?.autoTrade || false);
-  const [telegramId, setTelegramId] = useState(mt4Settings?.telegramId || '');
-  const [message, setMessage] = useState('');
-
-  const handleSave = async () => {
-    setMessage('');
-    if (!login || !password || !server) {
-      setMessage('Please fill in Login, Password, and Server details.');
-      return;
-    }
-
-    const newSettings = { login, password, server, autoTrade, telegramId, connected: true };
-    await saveSettings(newSettings);
-    onClose();
-  };
-
-  return (
-    <div className="fixed inset-0 bg-black bg-opacity-75 flex items-center justify-center p-4 z-50">
-      <div className="bg-gray-800 rounded-xl shadow-2xl p-6 w-full max-w-lg border border-indigo-600">
-        <h2 className="text-2xl font-bold text-white mb-4 flex items-center">
-          <Power className="w-6 h-6 mr-2 text-indigo-400" /> Connect MT4/MT5 Account
-        </h2>
-        <p className="text-sm text-gray-400 mb-6">
-          <Eye className="w-4 h-4 inline mr-1" /> Connection is simulated. Credentials are securely stored in your private Firestore data.
-        </p>
-
-        {message && <Notification type="error">{message}</Notification>}
-
-        <div className="space-y-4">
-          <label className="block">
-            <span className="text-gray-300 flex items-center"><User className="w-4 h-4 mr-2" /> Account Login:</span>
-            <input
-              type="text"
-              className="mt-1 block w-full bg-gray-700 border border-gray-600 rounded-lg p-2 text-white"
-              value={login}
-              onChange={(e) => setLogin(e.target.value)}
-            />
-          </label>
-          <label className="block">
-            <span className="text-gray-300 flex items-center"><Shield className="w-4 h-4 mr-2" /> Password:</span>
-            <input
-              type="password"
-              className="mt-1 block w-full bg-gray-700 border border-gray-600 rounded-lg p-2 text-white"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-            />
-          </label>
-          <label className="block">
-            <span className="text-gray-300 flex items-center"><Server className="w-4 h-4 mr-2" /> Server (e.g., BrokerName-Demo/Real):</span>
-            <input
-              type="text"
-              className="mt-1 block w-full bg-gray-700 border border-gray-600 rounded-lg p-2 text-white"
-              value={server}
-              onChange={(e) => setServer(e.target.value)}
-            />
-          </label>
-
-          <div className="flex justify-between items-center bg-gray-700 p-3 rounded-lg">
-            <span className="text-gray-300 flex items-center"><Cpu className="w-4 h-4 mr-2" /> Enable Auto Execution:</span>
-            <input
-              type="checkbox"
-              className="form-checkbox h-5 w-5 text-indigo-600 rounded border-gray-500 bg-gray-600"
-              checked={autoTrade}
-              onChange={(e) => setAutoTrade(e.target.checked)}
-            />
-          </div>
-
-          <label className="block pt-2">
-            <span className="text-gray-300 flex items-center"><Send className="w-4 h-4 mr-2" /> Telegram Chat ID (Optional for alerts):</span>
-            <input
-              type="text"
-              placeholder="e.g., 123456789 (Simulated Integration)"
-              className="mt-1 block w-full bg-gray-700 border border-gray-600 rounded-lg p-2 text-white"
-              value={telegramId}
-              onChange={(e) => setTelegramId(e.target.value)}
-            />
-          </label>
-        </div>
-
-        <div className="mt-6 flex justify-end space-x-3">
-          <button
-            onClick={onClose}
-            className="px-4 py-2 text-gray-300 bg-gray-600 rounded-lg hover:bg-gray-700 transition"
-          >
-            Cancel
-          </button>
-          <button
-            onClick={handleSave}
-            className="px-4 py-2 text-white bg-indigo-600 rounded-lg font-semibold hover:bg-indigo-700 transition flex items-center"
-          >
-            <Power className="w-4 h-4 mr-2" /> {mt4Settings?.connected ? 'Update Connection' : 'Connect'}
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-};
-
-// --- Main Application Component ---
-
-const App = () => {
-  const { userId, isAuthReady, error, authInstance } = useFirebaseAuthState();
-  const { settings: mt4Settings, loading: loadingMT4, saveSettings } = useMT4Settings(userId, isAuthReady);
-
-  const [signals, setSignals] = useState([]);
-  const [lastRefresh, setLastRefresh] = useState(null);
-  const [isModalOpen, setIsModalOpen] = useState(false);
-  const [isRefreshing, setIsRefreshing] = useState(false);
-
-  const mt4Connected = mt4Settings?.connected && mt4Settings?.login;
-  const autoTrade = mt4Settings?.autoTrade || false;
-
-  // Function to simulate the backend signal generation/refresh and trade closure
-  const refreshSignals = useCallback(async () => {
-    if (isRefreshing) return;
-    setIsRefreshing(true);
-    // Simulate network delay
-    await new Promise(resolve => setTimeout(resolve, 800));
-
-    // 1. Process existing open signals (NEW, EXECUTED, CONFIRMED)
-    setSignals(prevSignals => {
-        // Filter signals into those that are closed (TP/SL/DENIED) and those that are open
-        let openSignals = prevSignals.filter(s => s.status !== 'HIT_TP' && s.status !== 'HIT_SL' && s.status !== 'DENIED');
-        let closedSignals = prevSignals.filter(s => s.status === 'HIT_TP' || s.status === 'HIT_SL' || s.status === 'DENIED');
-
-        // Check if any active trade (EXECUTED or CONFIRMED) should be closed
-        const updatedOpenSignals = openSignals.map(signal => {
-            // 20% chance to close an active trade on this refresh cycle
-            if (Math.random() < 0.20 && (signal.status === 'EXECUTED' || signal.status === 'CONFIRMED')) {
-                const closureStatus = Math.random() > 0.5 ? 'HIT_TP' : 'HIT_SL';
-                console.log(`SIMULATION: Signal ${signal.id} closed as ${closureStatus}.`);
-                return { 
-                    ...signal, 
-                    status: closureStatus, 
-                    timestamp: signal.timestamp, // Keep original entry time
-                    closureTime: new Date().toLocaleTimeString() 
-                };
-            }
-            return signal;
-        });
-
-        // 2. Generate new signals
-        const newSignals = generateMockSignals(3);
+        /* Custom styling for the Conviction Gauge */
+        .gauge-container {
+            width: 100%;
+            height: 12px;
+            background: #21262d; 
+            border-radius: 9999px;
+            overflow: hidden;
+            box-shadow: inset 0 1px 3px rgba(0, 0, 0, 0.6);
+        }
+        .gauge-fill {
+            height: 100%;
+            transition: width 1s ease-out, background-color 0.5s ease-out;
+            border-radius: 9999px;
+        }
+        .card-shadow {
+            box-shadow: 0 6px 15px -3px rgba(0, 0, 0, 0.5), 0 4px 6px -4px rgba(0, 0, 0, 0.5);
+        }
+        .status-icon-tp { background-color: #10b981; } /* Green */
+        .status-icon-sl { background-color: #ef4444; } /* Red */
+        .status-icon-running { background-color: #f59e0b; } /* Yellow */
+        .status-icon-replaced { background-color: #3b82f6; } /* Blue */
         
-        // 3. Simulated auto-execution check for NEW signals
-        const readyNewSignals = newSignals.map(s => {
-            if (mt4Connected && autoTrade && s.status === 'NEW') {
-                return { ...s, status: 'EXECUTED' };
+        /* Login Screen Gradient */
+        .login-bg-gradient {
+            background: linear-gradient(135deg, #1f2937 0%, #0d1117 100%);
+        }
+
+        /* Sidebar specifics */
+        #sidebar {
+            transition: transform 0.3s ease-in-out, width 0.3s ease-in-out;
+            background-color: #161b22;
+            border-right: 1px solid #21262d;
+        }
+        /* Mobile: Hidden by default */
+        @media (max-width: 1023px) {
+            #sidebar {
+                position: fixed;
+                top: 0;
+                left: 0;
+                width: 85%;
+                max-width: 320px;
+                height: 100vh;
+                z-index: 50;
+                transform: translateX(-100%);
             }
-            return s;
-        });
+            #sidebar.open {
+                transform: translateX(0);
+            }
+        }
+        /* Desktop: Fixed width */
+        @media (min-width: 1024px) {
+            #sidebar {
+                width: 300px;
+                flex-shrink: 0;
+                transform: translateX(0) !important;
+            }
+        }
+    </style>
+</head>
+<body class="min-h-screen">
 
-        // Return all signals: closed, updated open, and newly generated.
-        // Sort by the original timestamp to keep a chronological view (newest first).
-        return [...closedSignals, ...updatedOpenSignals.filter(s => s.status !== 'HIT_TP' && s.status !== 'HIT_SL'), ...readyNewSignals]
-            .sort((a, b) => {
-                // Prioritize closed trades at the top for visibility, then sort by original timestamp
-                const statusOrder = (status) => 
-                    status === 'HIT_TP' ? 1 : 
-                    status === 'HIT_SL' ? 2 : 3;
+    <!-- Firebase Initialization and Utility Functions -->
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getFirestore, doc, setDoc, onSnapshot, setLogLevel, updateDoc, collection, query, getDocs } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
 
-                const statusComparison = statusOrder(a.status) - statusOrder(b.status);
-                if (statusComparison !== 0) return statusComparison;
+        setLogLevel('debug'); // Enable Firestore logging
 
-                return new Date(b.timestamp) - new Date(a.timestamp); 
+        let app, db, auth;
+        let userId = null;
+        let isAuthReady = false;
+        
+        // Global environment variables (must be present)
+        const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
+        const firebaseConfig = JSON.parse(typeof __firebase_config !== 'undefined' ? __firebase_config : '{}');
+        const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
+
+        // Global State for the Application
+        window.appState = {
+            mt4Account: null,
+            mt5Account: null,
+            serverLists: { mt4: [], mt5: [] },
+            isAuthenticated: false,
+            allSignals: [],
+            // New state for LLM outputs
+            sentimentSummaryText: 'Click "✨ Summarize Market Sentiment" to generate the latest macro analysis.',
+            isAudioAvailable: false,
+            currentAudioUrl: null,
+        };
+
+        // --- GEMINI API UTILITIES & CONFIG ---
+        const API_KEY = ""; // Provided by Canvas environment
+        
+        // Text Generation Model URL (for analysis)
+        const FLASH_API_MODEL = "gemini-2.5-flash-preview-09-2025";
+        const FLASH_API_URL = `https://generativelanguage.googleapis.com/v1beta/models/${FLASH_API_MODEL}:generateContent`;
+
+        // TTS Model URL (for audio briefing)
+        const TTS_API_MODEL = "gemini-2.5-flash-preview-tts";
+        const TTS_API_URL = `https://generativelanguage.googleapis.com/v1beta/models/${TTS_API_MODEL}:generateContent`;
+
+
+        // --- TTS Helper Functions (PCM to WAV conversion) ---
+
+        // Function to convert base64 data to ArrayBuffer
+        const base64ToArrayBuffer = (base64) => {
+            const binaryString = atob(base64);
+            const len = binaryString.length;
+            const bytes = new Uint8Array(len);
+            for (let i = 0; i < len; i++) {
+                bytes[i] = binaryString.charCodeAt(i);
+            }
+            return bytes.buffer;
+        };
+
+        // Helper function for writing strings to DataView
+        const writeString = (view, offset, string) => {
+            for (let i = 0; i < string.length; i++) {
+                view.setUint8(offset + i, string.charCodeAt(i));
+            }
+        };
+
+        // Function to convert PCM audio data into a WAV Blob
+        const pcmToWav = (pcm16, sampleRate = 16000) => {
+            // 16-bit signed PCM, 1 channel
+            const numChannels = 1;
+            const bitDepth = 16;
+            const bytesPerSample = bitDepth / 8;
+            const byteRate = sampleRate * numChannels * bytesPerSample;
+            
+            // Total size of the PCM data
+            const pcmDataSize = pcm16.length * bytesPerSample;
+            // Total file size: 44 bytes (header) + pcmDataSize
+            const fileSize = 44 + pcmDataSize;
+
+            // Create the buffer for the WAV file
+            const buffer = new ArrayBuffer(fileSize);
+            const view = new DataView(buffer);
+
+            let offset = 0;
+
+            // RIFF identifier 'RIFF'
+            writeString(view, offset, 'RIFF'); offset += 4;
+            // File size (36 + data size)
+            view.setUint32(offset, fileSize - 8, true); offset += 4;
+            // RIFF type 'WAVE'
+            writeString(view, offset, 'WAVE'); offset += 4;
+            // Format chunk identifier 'fmt '
+            writeString(view, offset, 'fmt '); offset += 4;
+            // Format chunk length (16 for PCM)
+            view.setUint32(offset, 16, true); offset += 4;
+            // Sample format (1 for PCM)
+            view.setUint16(offset, 1, true); offset += 2;
+            // Number of channels
+            view.setUint16(offset, numChannels, true); offset += 2;
+            // Sample rate
+            view.setUint32(offset, sampleRate, true); offset += 4;
+            // Byte rate (sampleRate * numChannels * bytesPerSample)
+            view.setUint32(offset, byteRate, true); offset += 4;
+            // Block align (numChannels * bytesPerSample)
+            view.setUint16(offset, numChannels * bytesPerSample, true); offset += 2;
+            // Bit depth
+            view.setUint16(offset, bitDepth, true); offset += 2;
+            // Data chunk identifier 'data'
+            writeString(view, offset, 'data'); offset += 4;
+            // Data chunk size
+            view.setUint32(offset, pcmDataSize, true); offset += 4;
+
+            // Write PCM data
+            for (let i = 0; i < pcm16.length; i++, offset += 2) {
+                view.setInt16(offset, pcm16[i], true);
+            }
+
+            return new Blob([buffer], { type: 'audio/wav' });
+        };
+
+
+        // --- LLM API CALLS (Text Generation) ---
+        
+        /**
+         * Fetches a response from the Gemini API with exponential backoff.
+         * @param {string} userQuery - The main prompt for the LLM.
+         * @param {string} systemPrompt - Instructions for the LLM's persona/behavior.
+         * @param {boolean} useGrounding - Whether to use Google Search grounding.
+         * @param {number} attempt - Current retry attempt.
+         * @returns {Promise<{text: string, sources: Array<{uri: string, title: string}>}>}
+         */
+        const fetchLLMResponse = async (userQuery, systemPrompt, useGrounding = true, attempt = 0) => {
+            const MAX_RETRIES = 5;
+
+            const payload = {
+                contents: [{ parts: [{ text: userQuery }] }],
+                systemInstruction: { parts: [{ text: systemPrompt }] },
+                tools: useGrounding ? [{ "google_search": {} }] : undefined,
+            };
+
+            try {
+                const response = await fetch(`${FLASH_API_URL}?key=${API_KEY}`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+
+                if (!response.ok) {
+                    if (response.status === 429 && attempt < MAX_RETRIES) {
+                        const delay = Math.pow(2, attempt) * 1000 + Math.random() * 1000;
+                        await new Promise(resolve => setTimeout(resolve, delay));
+                        return fetchLLMResponse(userQuery, systemPrompt, useGrounding, attempt + 1);
+                    }
+                    throw new Error(`API request failed with status: ${response.status}`);
+                }
+
+                const result = await response.json();
+                const candidate = result.candidates?.[0];
+
+                if (candidate && candidate.content?.parts?.[0]?.text) {
+                    const text = candidate.content.parts[0].text;
+                    let sources = [];
+                    const groundingMetadata = candidate.groundingMetadata;
+
+                    if (groundingMetadata && groundingMetadata.groundingAttributions) {
+                        sources = groundingMetadata.groundingAttributions
+                            .map(attribution => ({
+                                uri: attribution.web?.uri,
+                                title: attribution.web?.title,
+                            }))
+                            .filter(source => source.uri && source.title);
+                    }
+                    return { text, sources };
+
+                } else {
+                    throw new Error("Invalid response structure from Gemini API.");
+                }
+
+            } catch (error) {
+                console.error("Gemini API Error:", error);
+                return { text: `Error: Could not generate analysis. ${error.message}`, sources: [] };
+            }
+        };
+
+
+        /**
+         * Feature 1: Generates deep fundamental analysis for a single trading signal.
+         */
+        window.generateSignalAnalysis = async (signalId) => {
+            const signal = window.appState.allSignals.find(s => s.id === signalId);
+            if (!signal) {
+                alertModal('Error', 'Signal data not found.');
+                return;
+            }
+
+            const button = document.getElementById(`analyze-btn-${signalId}`);
+            if (button) {
+                button.disabled = true;
+                button.innerHTML = '<i data-lucide="loader" class="w-4 h-4 mr-2 animate-spin"></i> Analyzing...';
+                lucide.createIcons();
+            }
+
+            const systemPrompt = "You are a seasoned institutional forex analyst. Provide a deep, grounded, and concise analysis of the requested trading signal. Justify the direction (BUY/SELL) based on current macro factors, geopolitical events, and major economic data releases (like FOMC, NFP, CPI). Assume the SMC concepts (BOS, FVG, OB) are valid structural components, but focus your analysis on the *fundamental* reason the structure is holding or breaking. Format the output as a sharp, structured trading note.";
+            
+            const userQuery = `Provide a deep fundamental analysis for this trading signal: Pair: ${signal.pair}, Bias: ${signal.bias}, Timeframe: ${signal.timeframe}, R:R: ${signal.r}:1. The signal is based on an 'Order Block Mitigation' and 'Liquidity Sweep' structural concept. Justify the trade based on the latest fundamental and macro drivers relevant to this currency pair.`;
+
+            const { text, sources } = await fetchLLMResponse(userQuery, systemPrompt, true);
+
+            if (button) {
+                button.disabled = false;
+                button.innerHTML = '<i data-lucide="brain-circuit" class="w-4 h-4 mr-2"></i> ✨ Deep Dive Analysis';
+                lucide.createIcons();
+            }
+            
+            let sourceList = sources.length > 0 ? sources.map(s => `<li class="text-xs text-indigo-400 break-words"><a href="${s.uri}" target="_blank" class="hover:underline">${s.title}</a></li>`).join('') : '<li class="text-xs text-gray-500">No external sources cited.</li>';
+            
+            const modalContent = `
+                <div class="space-y-4">
+                    <p class="text-gray-300 whitespace-pre-wrap">${text}</p>
+                    <div class="pt-4 border-t border-gray-700">
+                        <p class="font-semibold text-sm text-sky-400 mb-2">Grounding Sources:</p>
+                        <ul class="list-disc list-inside space-y-1 pl-4">${sourceList}</ul>
+                    </div>
+                </div>
+            `;
+            
+            alertModal(`Institutional Analysis: ${signal.pair} ${signal.bias}`, modalContent, true);
+        };
+
+        /**
+         * Feature 2: Generates a global market sentiment summary.
+         */
+        window.generateMarketSentiment = async () => {
+            const container = document.getElementById('llm-sentiment-summary');
+            const button = document.getElementById('sentiment-btn');
+            const audioButtonContainer = document.getElementById('audio-briefing-container');
+
+            // Reset state
+            window.appState.isAudioAvailable = false;
+            if (window.appState.currentAudioUrl) URL.revokeObjectURL(window.appState.currentAudioUrl);
+            audioButtonContainer.innerHTML = '';
+
+
+            if (button) {
+                button.disabled = true;
+                button.innerHTML = '<i data-lucide="loader" class="w-4 h-4 mr-2 animate-spin"></i> Generating Macro Summary...';
+                lucide.createIcons();
+            }
+            container.innerHTML = `<p class="text-center text-gray-500 py-6"><i data-lucide="sun" class="w-5 h-5 mr-2 animate-pulse inline"></i> Fetching real-time market drivers...</p>`;
+
+            const systemPrompt = "You are a market commentator for institutional investors. Provide a highly concise, three-paragraph summary of the current global market sentiment. Paragraph 1: Key Macro/Central Bank Events (e.g., Fed decisions, NFP). Paragraph 2: Major Geopolitical/Risk Drivers. Paragraph 3: Overall Directional Bias for major USD pairs (EURUSD, USDJPY, GBPUSD). Use a professional, slightly bearish/bullish tone as appropriate. Do not use bullets or markdown headings.";
+            
+            const userQuery = "Summarize the current global macro landscape and its impact on the forex market today, highlighting the most recent economic reports and risk sentiment.";
+
+            const { text, sources } = await fetchLLMResponse(userQuery, systemPrompt, true);
+            
+            // Store the text for the TTS feature
+            window.appState.sentimentSummaryText = text;
+
+            if (button) {
+                button.disabled = false;
+                button.innerHTML = '<i data-lucide="trending-up" class="w-4 h-4 mr-2"></i> ✨ Summarize Market Sentiment';
+                lucide.createIcons();
+            }
+
+            let sourceList = sources.length > 0 ? sources.map(s => `<li class="text-xs text-indigo-400 break-words"><a href="${s.uri}" target="_blank" class="hover:underline">${s.title}</a></li>`).join('') : '<li class="text-xs text-gray-500">No external sources cited.</li>';
+            
+            container.innerHTML = `
+                <div class="space-y-4">
+                    <p id="sentiment-text-output" class="text-gray-300 whitespace-pre-wrap leading-relaxed">${text}</p>
+                    <div id="audio-briefing-container" class="pt-4 border-t border-gray-800">
+                        <button id="play-audio-btn" onclick="window.requestAudioBriefing()" class="w-full py-2 rounded-lg font-bold text-sm text-white bg-pink-600 hover:bg-pink-700 transition duration-200 flex items-center justify-center">
+                            <i data-lucide="volume-2" class="w-4 h-4 mr-2"></i>
+                            ✨ Generate Audio Briefing
+                        </button>
+                    </div>
+                    <div class="pt-4 border-t border-gray-800">
+                        <p class="font-semibold text-sm text-sky-400 mb-2">Sources:</p>
+                        <ul class="list-disc list-inside space-y-1 pl-4">${sourceList}</ul>
+                    </div>
+                </div>
+            `;
+            lucide.createIcons();
+        };
+
+        /**
+         * Feature 3: Requests audio for the generated market sentiment text (TTS).
+         */
+        window.requestAudioBriefing = async () => {
+            const button = document.getElementById('play-audio-btn');
+            const textToSpeak = window.appState.sentimentSummaryText;
+            
+            if (!textToSpeak || textToSpeak.startsWith('Click')) {
+                alertModal('Error', 'Please generate the market sentiment summary first.');
+                return;
+            }
+
+            if (button) {
+                button.disabled = true;
+                button.innerHTML = '<i data-lucide="loader" class="w-4 h-4 mr-2 animate-spin"></i> Generating Audio...';
+                lucide.createIcons();
+            }
+
+            try {
+                // The TTS model works best with a clear instruction
+                const fullPrompt = `Say the following market analysis in a professional and informative tone: ${textToSpeak}`;
+
+                const payload = {
+                    contents: [{
+                        parts: [{ text: fullPrompt }]
+                    }],
+                    generationConfig: {
+                        responseModalities: ["AUDIO"],
+                        speechConfig: {
+                            voiceConfig: {
+                                prebuiltVoiceConfig: { voiceName: "Charon" } // Professional, Informative
+                            }
+                        }
+                    },
+                };
+
+                const response = await fetch(`${TTS_API_URL}?key=${API_KEY}`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+                
+                if (!response.ok) {
+                    throw new Error(`TTS API failed with status: ${response.status}`);
+                }
+
+                const result = await response.json();
+                const part = result?.candidates?.[0]?.content?.parts?.[0];
+                const audioData = part?.inlineData?.data;
+                const mimeType = part?.inlineData?.mimeType;
+
+                if (audioData && mimeType && mimeType.startsWith("audio/L16")) {
+                    // 1. Get sample rate from mimeType (e.g., audio/L16;rate=16000)
+                    const rateMatch = mimeType.match(/rate=(\d+)/);
+                    const sampleRate = rateMatch ? parseInt(rateMatch[1], 10) : 16000;
+
+                    // 2. Convert base64 to ArrayBuffer (PCM data)
+                    const pcmData = base64ToArrayBuffer(audioData);
+                    
+                    // 3. Convert ArrayBuffer (raw PCM16) to Int16Array
+                    const pcm16 = new Int16Array(pcmData);
+
+                    // 4. Convert PCM to WAV Blob
+                    const wavBlob = pcmToWav(pcm16, sampleRate);
+                    
+                    // 5. Create URL and play audio
+                    if (window.appState.currentAudioUrl) URL.revokeObjectURL(window.appState.currentAudioUrl);
+                    const audioUrl = URL.createObjectURL(wavBlob);
+                    window.appState.currentAudioUrl = audioUrl;
+
+                    const audio = new Audio(audioUrl);
+                    audio.play();
+
+                    // Update UI for playback
+                    button.innerHTML = '<i data-lucide="volume-x" class="w-4 h-4 mr-2"></i> Playing Briefing...';
+                    
+                    audio.onended = () => {
+                        button.innerHTML = '<i data-lucide="volume-2" class="w-4 h-4 mr-2"></i> ✨ Replay Audio Briefing';
+                        button.disabled = false;
+                        lucide.createIcons();
+                    };
+                } else {
+                    throw new Error("Invalid audio response from TTS API.");
+                }
+
+            } catch (error) {
+                console.error("TTS Audio Error:", error);
+                alertModal('Audio Generation Failed', `Could not generate audio briefing. ${error.message}`);
+                button.disabled = false;
+                button.innerHTML = '<i data-lucide="volume-x" class="w-4 h-4 mr-2"></i> Audio Failed';
+            }
+            lucide.createIcons();
+        };
+
+
+        // --- FIRESTORE LISTENERS & DATA MANAGEMENT ---
+
+        // 1. Listen for Public Server Lists (Must run as soon as 'db' is available and auth is complete)
+        const setupServerListener = () => {
+            if (!db) {
+                console.warn("DB not initialized yet, cannot set up server listener.");
+                return;
+            }
+
+            // Path for public data
+            const serverListPath = doc(db, 'artifacts', appId, 'public', 'data', 'broker_servers', 'lists');
+
+            onSnapshot(serverListPath, (docSnapshot) => {
+                if (docSnapshot.exists()) {
+                    const data = docSnapshot.data();
+                    window.appState.serverLists.mt4 = data.mt4Servers || [];
+                    window.appState.serverLists.mt5 = data.mt5Servers || [];
+                    const lastUpdated = data.lastUpdated || 'N/A';
+                    const elem = document.getElementById('last-server-update');
+                    if(elem) elem.textContent = `Last update: ${lastUpdated}`;
+                    updateServerDropdowns();
+                } else {
+                    // Set initial default servers if none exist
+                    setDoc(serverListPath, {
+                        mt4Servers: ['Broker A-Demo', 'Broker A-Live', 'Broker B-Live'],
+                        mt5Servers: ['Broker X-Demo', 'Broker X-Live', 'Broker Y-Live'],
+                        lastUpdated: new Date().toLocaleTimeString(),
+                    }, { merge: true }).catch(console.error);
+                }
+            }, (error) => {
+                console.error("Error fetching server list:", error);
             });
-    });
+        };
 
-    setLastRefresh(new Date());
-    setIsRefreshing(false);
+        // 2. Listen for User Account Connections (MT4/MT5 - Requires resolved userId)
+        const setupAccountListeners = () => {
+            if (!userId || !db) return;
+            
+            // Define document paths for private user data
+            const mt4Path = doc(db, 'artifacts', appId, 'users', userId, 'accounts', 'mt4');
+            const mt5Path = doc(db, 'artifacts', appId, 'users', userId, 'accounts', 'mt5');
 
-  }, [mt4Connected, autoTrade, isRefreshing]);
+            onSnapshot(mt4Path, (docSnapshot) => {
+                window.appState.mt4Account = docSnapshot.exists() ? docSnapshot.data() : null;
+                renderAccountStatus('mt4');
+            }, (error) => console.error("Error fetching MT4 account:", error));
 
-  // Initial load and periodic refresh
-  useEffect(() => {
-    if (!isAuthReady || !userId) return;
+            onSnapshot(mt5Path, (docSnapshot) => {
+                window.appState.mt5Account = docSnapshot.exists() ? docSnapshot.data() : null;
+                renderAccountStatus('mt5');
+            }, (error) => console.error("Error fetching MT5 account:", error));
+        };
+        
+        // --- FIREBASE INITIALIZATION AND AUTH ---
+        if (Object.keys(firebaseConfig).length > 0) {
+            app = initializeApp(firebaseConfig);
+            db = getFirestore(app);
+            auth = getAuth(app);
 
-    // Load initial signals
-    refreshSignals();
+            // Listen for AUTH state changes first
+            onAuthStateChanged(auth, (user) => {
+                if (user) {
+                    userId = user.uid;
+                    // Start public listener now that we have a secure context
+                    setupServerListener(); 
+                    // Start private listeners
+                    setupAccountListeners(); 
+                } else {
+                    // Fallback UUID if token sign-in fails, but we still need to try to fetch public data
+                    userId = crypto.randomUUID();
+                    // Attempt to fetch public data
+                    setupServerListener(); 
+                }
+                
+                isAuthReady = true;
+                window.appState.isAuthenticated = true;
+                renderApp(); // Render the dashboard after auth is resolved
+            });
 
-    // Setup 30-second refresh interval
-    const intervalId = setInterval(() => {
-      refreshSignals();
-    }, 30000); // 30 seconds
+            const authenticate = async () => {
+                try {
+                    if (initialAuthToken) {
+                        await signInWithCustomToken(auth, initialAuthToken);
+                    } else {
+                        await signInAnonymously(auth);
+                    }
+                } catch (error) {
+                    console.error("Firebase Auth Error:", error);
+                }
+            };
+            authenticate();
+        } else {
+            console.warn("Firebase configuration not found. Running in UI simulation mode.");
+            // In simulation mode, assume auth is ready quickly and render immediately
+            isAuthReady = true;
+            userId = crypto.randomUUID();
+            window.appState.isAuthenticated = true;
+            setTimeout(renderApp, 500); 
+        }
 
-    return () => clearInterval(intervalId);
-  }, [isAuthReady, userId, refreshSignals]);
+
+        // --- MT4/MT5 Server Uploader and Connection Logic ---
+        window.handleFileUpload = async (event, platform) => {
+            const file = event.target.files[0];
+            if (!file) return;
+            if (!db || !userId) {
+                alertModal('Error', 'Application is still initializing. Please wait and try again.');
+                return;
+            }
+
+            const reader = new FileReader();
+            reader.onload = async (e) => {
+                const text = e.target.result;
+                const newServers = text.split('\n')
+                                    .map(line => line.trim())
+                                    .filter(line => line.length > 0);
+
+                if (newServers.length === 0) {
+                    alertModal('Upload Failed', 'The uploaded file was empty or contained no valid server names.');
+                    return;
+                }
+
+                try {
+                    const dataToUpdate = {
+                        [`${platform}Servers`]: newServers,
+                        lastUpdated: new Date().toLocaleTimeString(),
+                    };
+                    // Ensure serverListPath is available (db is guaranteed here)
+                    const serverListPath = doc(db, 'artifacts', appId, 'public', 'data', 'broker_servers', 'lists');
+                    await setDoc(serverListPath, dataToUpdate, { merge: true });
+                    alertModal('Success', `${newServers.length} new ${platform.toUpperCase()} servers uploaded.`);
+                } catch (error) {
+                    console.error("Error updating server list:", error);
+                    alertModal('Upload Error', 'Failed to update server list in Firestore. Check permissions.');
+                }
+            };
+            reader.readAsText(file);
+        };
+
+        window.handleConnection = async (event, platform) => {
+            event.preventDefault();
+            if (!db || !userId) {
+                alertModal('Error', 'Application is still initializing. Please wait and try again.');
+                return;
+            }
+            
+            const form = event.target;
+            const data = Object.fromEntries(new FormData(form).entries());
+            
+            // === CRITICAL SECURITY FIX: DO NOT SAVE PASSWORD ===
+            delete data.password; 
+            // =================================================
+
+            // Simulate connection success/failure
+            const success = Math.random() > 0.1; 
+            const status = success ? 'Connected' : 'Failed';
+            
+            const newAccountData = {
+                broker: data.brokerName,
+                server: data.serverName,
+                loginId: data.loginId,
+                type: data.accountType,
+                status: status,
+                balance: success ? (Math.random() * 5000 + 1000).toFixed(2) : '0.00',
+                equity: success ? (Math.random() * 5000 + 1000).toFixed(2) : '0.00',
+                leverage: success ? (Math.random() > 0.5 ? '1:100' : '1:500') : 'N/A',
+                ping: success ? Math.floor(Math.random() * 80 + 20) : 'N/A',
+                lastConnect: new Date().toLocaleTimeString(),
+            };
+
+            if (db && userId) {
+                const accountPath = doc(db, 'artifacts', appId, 'users', userId, 'accounts', platform);
+                try {
+                    await setDoc(accountPath, newAccountData, { merge: true });
+                    alertModal('Connection Result', `${platform.toUpperCase()} connection attempt: ${status}. Data saved.`);
+                } catch (error) {
+                    console.error("Error saving account data:", error);
+                    alertModal('Error', 'Failed to save connection data to Firestore. Check user permissions.');
+                }
+            } else {
+                 alertModal('Connection Result (Simulated)', `${platform.toUpperCase()} connection attempt: ${status}. (Not saved to Firestore - Check config/auth)`);
+            }
+        };
+
+        // --- DASHBOARD SIGNAL LOGIC (Keep existing functionality) ---
+        const REFRESH_INTERVAL_MS = 10800000; // 3 hours
+        const PAIRS = ['XAUUSD', 'EURUSD', 'GBPUSD', 'AUDJPY', 'USDCAD', 'NZDUSD'];
+        const TIMEFRAMES = ['H4', 'D1'];
+        const generateUUID = () => crypto.randomUUID();
+
+        const STATUS = {
+            TP: { icon: '🟢 TP', color: 'status-icon-tp', explanation: 'Price hit the Take Profit zone. Target achieved.' },
+            SL: { icon: '🔴 SL', color: 'status-icon-sl', explanation: 'Price hit the Stop Loss level. Structure violated.' },
+            RUNNING: { icon: '🟡 Running', color: 'status-icon-running', explanation: 'Trade is currently active, no target or stop reached yet.' },
+            REPLACED: { icon: '🔵 Old Signal', color: 'status-icon-replaced', explanation: 'Market structure (BOS/CHoCH) shifted, invalidating this trade.' }
+        };
+
+        const getConvictionColor = (score) => {
+            if (score >= 90) return 'bg-green-500';
+            if (score >= 80) return 'bg-yellow-500';
+            return 'bg-red-500';
+        };
+
+        const generateSignal = () => {
+            const pair = PAIRS[Math.floor(Math.random() * PAIRS.length)];
+            const bias = Math.random() > 0.5 ? 'BUY' : 'SELL';
+            const tf = TIMEFRAMES[Math.floor(Math.random() * TIMEFRAMES.length)];
+            
+            const slPips = Math.round(Math.random() * 30 + 50); 
+            const rFactor = Math.random() * 7 + 8; 
+            const tpPips = Math.round(slPips * rFactor); 
+            const rRatio = (tpPips / slPips).toFixed(1);
+            const conviction = Math.floor(Math.random() * 15) + 85; 
+
+            const isJPY = pair.includes('JPY');
+            const isXAU = pair.includes('XAU');
+            const precision = isXAU ? 2 : (isJPY ? 3 : 5);
+            const pipsFactor = isXAU ? 100 : (isJPY ? 100 : 10000); 
+            const pipsUnit = 1 / pipsFactor;
+
+            let entryBase;
+            if (isXAU) entryBase = Math.random() * 100 + 2300; 
+            else if (isJPY) entryBase = Math.random() * 5 + 150; 
+            else entryBase = Math.random() * 0.05 + 1.1; 
+
+            const entryPrice = parseFloat(entryBase.toFixed(precision));
+            let slLevel, tpLevel;
+            
+            if (bias === 'BUY') {
+              slLevel = (entryPrice - slPips * pipsUnit).toFixed(precision);
+              tpLevel = (entryPrice + tpPips * pipsUnit).toFixed(precision);
+            } else { // SELL
+              slLevel = (entryPrice + slPips * pipsUnit).toFixed(precision);
+              tpLevel = (entryPrice - tpPips * pipsUnit).toFixed(precision);
+            }
+            
+            const factors = ['Order Block Mitigation', 'Fair Value Gap Fill', 'Deep Discount Zone Entry', 'Liquidity Sweep Confirmation', 'Successful Breaker Block Retest'];
+            const factor = factors[Math.floor(Math.random() * factors.length)];
+            let explanation = '';
+            if (bias === 'BUY') {
+                explanation = `Confirmed Bullish BOS. Price mitigated the H4 ${factor}. Look for continuation toward Buy-Side Liquidity. Conviction is high due to Volatility Shift.`;
+            } else {
+                explanation = `Confirmed Bearish BOS. Price respected the D1 ${factor}. Expect FVG fill and a drop to sweep Sell-Side Liquidity. Conviction remains solid.`;
+            }
+
+            return {
+                id: generateUUID(),
+                pair,
+                timeframe: tf,
+                entry: entryPrice.toFixed(precision),
+                stop_loss: slLevel,
+                take_profit: tpLevel,
+                conviction: conviction,
+                bias: bias,
+                r: rRatio,
+                slPips: slPips,
+                tpPips: tpPips,
+                explanation: explanation,
+                status: 'RUNNING', 
+                time_created: new Date().toLocaleTimeString('en-US'),
+                time_closed: null,
+                close_explanation: null,
+            };
+        };
+        
+        const checkSignalStatus = (signal) => {
+            let tpChance = signal.conviction / 100; 
+            const outcomeRoll = Math.random();
+
+            if (outcomeRoll < tpChance * 0.6) { 
+                return 'TP';
+            } else if (outcomeRoll < tpChance * 0.9) { 
+                return 'SL';
+            } else {
+                return 'RUNNING';
+            }
+        };
+
+        const checkMarketCondition = () => {
+            return Math.random() < 0.3; 
+        };
+
+        const renderCurrentSignals = (signals) => {
+            const container = document.getElementById('current-signals-container');
+            const activeSignals = signals.filter(s => s.status === 'RUNNING');
+            
+            if (!container) return; // Guard clause for when we are on the login screen
+
+            if (activeSignals.length === 0) {
+                 container.innerHTML = '<p class="text-gray-500 italic md:col-span-4">No high-quality signals available in the current market cycle. Waiting for a BOS/CHoCH.</p>';
+                 return;
+            }
+
+            container.innerHTML = activeSignals.map(signal => {
+                const isBuy = signal.bias === 'BUY';
+                const biasColor = isBuy ? 'text-green-500' : 'text-red-500';
+                const bgColor = isBuy ? 'bg-green-500/10' : 'bg-red-500/10';
+                const biasIcon = isBuy ? 'trending-up' : 'trending-down';
+                const convictionColorClass = getConvictionColor(signal.conviction);
+
+                const priceRow = (label, value, color) => `
+                    <div class="flex justify-between items-center text-sm border-b border-gray-800 py-1 last:border-b-0">
+                        <span class="text-gray-400 font-medium">${label}:</span>
+                        <span class="${color} font-mono font-semibold tracking-wide">${value}</span>
+                    </div>
+                `;
+
+                return `
+                    <div class="card-shadow bg-[#161b22] border-2 border-yellow-600/50 rounded-xl overflow-hidden transition duration-300 relative">
+                        <span class="absolute top-0 right-0 m-3 px-3 py-1 text-xs font-bold rounded-full ${STATUS.RUNNING.color} text-gray-900">${STATUS.RUNNING.icon}</span>
+
+                        <!-- Header -->
+                        <div class="p-4 border-b border-gray-800 ${bgColor}">
+                            <div class="flex justify-between items-start">
+                                <h2 class="text-2xl font-extrabold text-white flex items-center">
+                                    <i data-lucide="${biasIcon}" class="w-5 h-5 mr-2 ${biasColor}"></i>
+                                    <span>${signal.pair}</span>
+                                </h2>
+                                <span class="text-xs font-bold px-3 py-1 rounded-full ${isBuy ? 'bg-green-700 text-green-100' : 'bg-red-700 text-red-100'} shadow-md">
+                                    ${signal.bias}
+                                </span>
+                            </div>
+                            <div class="mt-1 flex justify-between items-center text-sm">
+                                <span class="font-medium text-gray-500">TF: <span class="font-mono text-indigo-400">${signal.timeframe}</span></span>
+                                <span class="font-medium text-gray-500">R:R: <span class="font-extrabold text-cyan-400">${signal.r}:1</span></span>
+                            </div>
+                        </div>
+
+                        <!-- Details Section -->
+                        <div class="p-4 space-y-3">
+                            
+                            <!-- Price Levels -->
+                            <div class="bg-gray-800/50 p-3 rounded-lg">
+                                ${priceRow('Entry Price', signal.entry, 'text-white text-lg')}
+                                ${priceRow(`Stop Loss (${signal.slPips} pips)`, signal.stop_loss, 'text-red-400')}
+                                ${priceRow(`Take Profit (${signal.tpPips} pips)`, signal.take_profit, 'text-green-400')}
+                            </div>
+
+                            <!-- Conviction Gauge -->
+                            <div>
+                                <div class="flex justify-between items-center mb-1">
+                                    <span class="text-sm font-medium text-gray-400 flex items-center">
+                                        <i data-lucide="zap" class="w-4 h-4 mr-1 text-yellow-400"></i>
+                                        Conviction Score
+                                    </span>
+                                    <span class="text-lg font-bold ${convictionColorClass.replace('bg', 'text')}">${signal.conviction}%</span>
+                                </div>
+                                <div class="gauge-container">
+                                    <div class="gauge-fill ${convictionColorClass}" style="width: ${signal.conviction}%;"></div>
+                                </div>
+                            </div>
+
+                            <!-- Explanation -->
+                            <div class="text-xs pt-2">
+                                <h4 class="font-semibold text-gray-300 mb-1 flex items-center">
+                                    <i data-lucide="message-square" class="w-3 h-3 mr-1 text-sky-400"></i>
+                                    Analysis Summary
+                                </h4>
+                                <p class="text-gray-400 italic leading-relaxed">${signal.explanation}</p>
+                            </div>
+                        </div>
+                        
+                        <!-- LLM Feature Button -->
+                        <div class="p-4 pt-0">
+                            <button id="analyze-btn-${signal.id}" onclick="window.generateSignalAnalysis('${signal.id}')" class="w-full py-2 rounded-lg font-bold text-sm text-white bg-pink-600 hover:bg-pink-700 transition duration-200 flex items-center justify-center">
+                                <i data-lucide="brain-circuit" class="w-4 h-4 mr-2"></i>
+                                ✨ Deep Dive Analysis
+                            </button>
+                        </div>
+
+                        <div class="p-2 bg-gray-900 text-right text-xs text-gray-600 border-t border-gray-800">
+                            Last Checked: ${signal.time_created}
+                        </div>
+                    </div>
+                `;
+            }).join('');
+        };
+
+        const renderPreviousSignals = (signals) => {
+            const container = document.getElementById('previous-signals-container');
+            if (!container) return;
+            const previousSignals = signals.filter(s => s.status !== 'RUNNING').reverse(); 
+            
+            if (previousSignals.length === 0) {
+                container.innerHTML = '<p id="no-previous-signals" class="text-gray-500 italic md:col-span-4">No previous signals tracked yet.</p>';
+                return;
+            }
+
+            container.innerHTML = previousSignals.map(signal => {
+                const finalResult = STATUS[signal.status];
+                
+                const dataRow = (label, value, valueClass = 'text-gray-200') => `
+                    <div class="flex justify-between items-center text-sm">
+                        <span class="text-gray-400">${label}:</span>
+                        <span class="${valueClass} font-mono font-medium">${value}</span>
+                    </div>
+                `;
+
+                return `
+                    <div class="card-shadow bg-[#161b22] border border-gray-800 rounded-xl p-4 transition duration-300 hover:border-gray-500 relative">
+                        
+                        <!-- Status Badge -->
+                        <div class="absolute top-4 right-4 px-3 py-1 text-xs font-bold rounded-full ${finalResult.color} text-gray-900 shadow-md">
+                            ${finalResult.icon}
+                        </div>
+
+                        <h3 class="text-xl font-extrabold text-white mb-3">
+                            ${signal.pair} <span class="text-gray-500 text-sm font-normal">(${signal.timeframe})</span>
+                        </h3>
+
+                        <div class="space-y-1 mb-3">
+                            ${dataRow('Entry Price', signal.entry, 'text-indigo-400')}
+                            ${dataRow('SL', signal.stop_loss, 'text-red-400')}
+                            ${dataRow('TP', signal.take_profit, 'text-green-400')}
+                        </div>
+
+                        <div class="space-y-1 border-t border-b border-gray-800 py-3">
+                            ${dataRow('Confidence Score', `${signal.conviction}%`, 'text-yellow-400')}
+                            ${dataRow('Time Created', signal.time_created)}
+                            ${dataRow('Time Closed', signal.time_closed || 'N/A')}
+                        </div>
+
+                        <div class="mt-3 text-xs">
+                            <h4 class="font-semibold text-gray-300 mb-1">
+                                Closing Note:
+                            </h4>
+                            <p class="text-gray-400 italic leading-relaxed">${signal.close_explanation || finalResult.explanation}</p>
+                        </div>
+                    </div>
+                `;
+            }).join('');
+        };
+
+        let signalInterval = null;
+
+        const refreshDashboard = () => {
+            if (!window.appState.isAuthenticated) return;
+
+            const statusPanel = document.getElementById('analysis-status');
+            if (!statusPanel) return;
+
+            const now = new Date();
+            const timeString = now.toLocaleTimeString('en-US');
+            const marketChanged = checkMarketCondition();
+            
+            let signalsToArchive = [];
+            let signalsToKeepRunning = [];
+
+            window.appState.allSignals.filter(s => s.status === 'RUNNING').forEach(signal => {
+                const outcome = checkSignalStatus(signal);
+                if (outcome === 'RUNNING') {
+                    signal.time_created = timeString; 
+                    signalsToKeepRunning.push(signal);
+                } else {
+                    signal.status = outcome;
+                    signal.time_closed = timeString;
+                    signal.close_explanation = STATUS[outcome].explanation;
+                    signalsToArchive.push(signal);
+                }
+            });
+
+            if (marketChanged || signalsToKeepRunning.length === 0) {
+                signalsToKeepRunning.forEach(signal => {
+                    signal.status = 'REPLACED';
+                    signal.time_closed = timeString;
+                    signal.close_explanation = STATUS.REPLACED.explanation;
+                    signalsToArchive.push(signal);
+                });
+                signalsToKeepRunning = []; 
+                
+                const newSignals = [];
+                for (let i = 0; i < 4; i++) {
+                    newSignals.push(generateSignal());
+                }
+                
+                window.appState.allSignals = [...window.appState.allSignals.filter(s => s.status !== 'RUNNING'), ...signalsToArchive, ...newSignals];
+
+                statusPanel.className = 'font-medium text-lg text-red-400';
+                statusPanel.innerHTML = `<i data-lucide="alert-triangle" class="inline w-5 h-5 mr-2"></i> NEW MARKET STRUCTURE DETECTED: ${newSignals.length} Fresh Signals Generated @ ${timeString}`;
+            
+            } else {
+                window.appState.allSignals = [...window.appState.allSignals.filter(s => s.status !== 'RUNNING'), ...signalsToArchive, ...signalsToKeepRunning];
+
+                statusPanel.className = 'font-medium text-lg text-green-400';
+                statusPanel.innerHTML = `<i data-lucide="check-circle" class="inline w-5 h-5 mr-2"></i> MARKET CONTINUATION: Signals Maintained and Timestamps Refreshed @ ${timeString}`;
+            }
+
+            renderCurrentSignals(window.appState.allSignals);
+            renderPreviousSignals(window.appState.allSignals);
+            lucide.createIcons();
+        };
+
+        // --- UI RENDERING FUNCTIONS ---
+
+        const alertModal = (title, message, isHtml = false) => {
+            const modal = document.getElementById('custom-modal');
+            const modalMessage = document.getElementById('modal-message');
+
+            document.getElementById('modal-title').textContent = title;
+            if (isHtml) {
+                modalMessage.innerHTML = message;
+            } else {
+                modalMessage.textContent = message;
+            }
+            modal.classList.remove('hidden');
+        };
+
+        const closeModal = () => {
+            document.getElementById('custom-modal').classList.add('hidden');
+        };
+
+        window.closeModal = closeModal;
+
+        const renderAccountStatus = (platform) => {
+            const account = window.appState[`${platform}Account`];
+            const container = document.getElementById(`${platform}-account-status`);
+
+            if (!container) return;
+
+            if (!account || account.status === 'Failed') {
+                container.innerHTML = `
+                    <div class="p-3 rounded-lg bg-red-900/30 text-red-300 border border-red-700">
+                        <p class="font-bold mb-1 flex items-center">
+                            <i data-lucide="circle-x" class="w-4 h-4 mr-2"></i>
+                            Not Connected
+                        </p>
+                        <p class="text-sm">Please enter credentials and click 'Connect Now'.</p>
+                    </div>
+                `;
+            } else {
+                const statusColor = account.status === 'Connected' ? 'bg-green-700/30 text-green-300 border-green-700' : 'bg-yellow-700/30 text-yellow-300 border-yellow-700';
+                const icon = account.status === 'Connected' ? 'check-circle' : 'loader-2';
+                
+                container.innerHTML = `
+                    <div class="p-3 rounded-lg ${statusColor} border">
+                        <p class="font-bold mb-1 flex items-center">
+                            <i data-lucide="${icon}" class="w-4 h-4 mr-2"></i>
+                            Status: ${account.status}
+                        </p>
+                        <div class="text-sm space-y-1">
+                            <p>Broker: <span class="font-semibold">${account.broker}</span></p>
+                            <p>Balance: <span class="font-mono text-lg text-cyan-400">$${account.balance}</span></p>
+                            <p>Equity: <span class="font-mono">$${account.equity}</span></p>
+                            <p>Leverage: ${account.leverage}</p>
+                            <p>Ping: ${account.ping} ms</p>
+                        </div>
+                    </div>
+                `;
+            }
+            lucide.createIcons();
+        };
+
+        const updateServerDropdowns = () => {
+            const platforms = ['mt4', 'mt5'];
+            platforms.forEach(platform => {
+                const dropdown = document.getElementById(`${platform}-server-name`);
+                const currentCount = document.getElementById(`current-${platform}-servers`);
+                
+                if (dropdown) {
+                    dropdown.innerHTML = '<option value="">Select Server</option>';
+                    window.appState.serverLists[platform].forEach(server => {
+                        const option = document.createElement('option');
+                        option.value = server;
+                        option.textContent = server;
+                        dropdown.appendChild(option);
+                    });
+                }
+                if (currentCount) {
+                    currentCount.textContent = `Current ${platform.toUpperCase()} servers loaded: ${window.appState.serverLists[platform].length}`;
+                }
+            });
+        };
+
+        const toggleSidebar = () => {
+            const sidebar = document.getElementById('sidebar');
+            const overlay = document.getElementById('sidebar-overlay');
+            sidebar.classList.toggle('open');
+            overlay.classList.toggle('hidden');
+        };
+        window.toggleSidebar = toggleSidebar;
+
+        // --- MAIN APP RENDERER ---
+        const getDashboardHTML = () => `
+            <div id="sidebar-overlay" class="fixed inset-0 bg-black/70 z-40 hidden lg:hidden" onclick="window.toggleSidebar()"></div>
+            
+            <div class="flex min-h-screen">
+                <!-- Sidebar (MT4/MT5 Connection & Uploader) -->
+                <div id="sidebar" class="z-50 p-4 lg:p-6 shadow-xl lg:shadow-none h-full overflow-y-auto">
+                    <div class="flex justify-between items-center mb-6 lg:mb-8">
+                        <h3 class="text-xl font-bold text-cyan-400">Account Manager</h3>
+                        <button onclick="window.toggleSidebar()" class="lg:hidden p-2 text-gray-400 hover:text-white rounded-full">
+                             <i data-lucide="x" class="w-6 h-6"></i>
+                        </button>
+                    </div>
+
+                    <!-- User ID Display -->
+                    <div class="mb-4 p-3 bg-gray-800 rounded-lg text-xs break-all">
+                        <span class="text-gray-500 font-medium">User ID:</span>
+                        <span class="font-mono text-indigo-400">${userId || 'N/A (Auth Error)'}</span>
+                    </div>
+
+                    <!-- MT4 Panel -->
+                    <div class="mb-6 border border-gray-700 rounded-lg overflow-hidden">
+                        <input type="checkbox" id="mt4-toggle" class="hidden peer" checked>
+                        <label for="mt4-toggle" class="p-4 flex justify-between items-center cursor-pointer bg-gray-800 hover:bg-gray-700/50">
+                            <h4 class="font-bold text-lg text-white flex items-center">
+                                <i data-lucide="terminal" class="w-5 h-5 mr-2 text-sky-400"></i>
+                                Connect MT4 Account
+                            </h4>
+                            <i data-lucide="chevron-down" class="w-5 h-5 text-gray-400 transition-transform duration-300 peer-checked:rotate-180"></i>
+                        </label>
+                        <div class="p-4 bg-[#161b22] peer-checked:block transition-all duration-300">
+                            <div id="mt4-account-status" class="mb-4"></div>
+                            <form onsubmit="window.handleConnection(event, 'mt4')" class="space-y-3">
+                                <input type="text" name="brokerName" placeholder="Broker Name" required class="w-full p-2 rounded-lg bg-gray-800 border border-gray-700 text-white">
+                                <select id="mt4-server-name" name="serverName" required class="w-full p-2 rounded-lg bg-gray-800 border border-gray-700 text-white">
+                                    <!-- Options populated by JS -->
+                                </select>
+                                <input type="text" name="loginId" placeholder="Login ID" required class="w-full p-2 rounded-lg bg-gray-800 border border-gray-700 text-white">
+                                <input type="password" name="password" placeholder="Password" required class="w-full p-2 rounded-lg bg-gray-800 border border-gray-700 text-white">
+                                <select name="accountType" class="w-full p-2 rounded-lg bg-gray-800 border border-gray-700 text-white">
+                                    <option value="Demo">Demo</option>
+                                    <option value="Live">Live</option>
+                                </select>
+                                <button type="submit" class="w-full py-2 rounded-lg font-bold text-white bg-indigo-600 hover:bg-indigo-700 transition duration-200">
+                                    Connect Now
+                                </button>
+                            </form>
+                        </div>
+                    </div>
+
+                    <!-- MT5 Panel -->
+                    <div class="mb-6 border border-gray-700 rounded-lg overflow-hidden">
+                        <input type="checkbox" id="mt5-toggle" class="hidden peer">
+                        <label for="mt5-toggle" class="p-4 flex justify-between items-center cursor-pointer bg-gray-800 hover:bg-gray-700/50">
+                            <h4 class="font-bold text-lg text-white flex items-center">
+                                <i data-lucide="terminal-square" class="w-5 h-5 mr-2 text-emerald-400"></i>
+                                Connect MT5 Account
+                            </h4>
+                            <i data-lucide="chevron-down" class="w-5 h-5 text-gray-400 transition-transform duration-300 peer-checked:rotate-180"></i>
+                        </label>
+                        <div class="p-4 bg-[#161b22] peer-checked:block transition-all duration-300 hidden">
+                            <div id="mt5-account-status" class="mb-4"></div>
+                            <form onsubmit="window.handleConnection(event, 'mt5')" class="space-y-3">
+                                <input type="text" name="brokerName" placeholder="Broker Name" required class="w-full p-2 rounded-lg bg-gray-800 border border-gray-700 text-white">
+                                <select id="mt5-server-name" name="serverName" required class="w-full p-2 rounded-lg bg-gray-800 border border-gray-700 text-white">
+                                    <!-- Options populated by JS -->
+                                </select>
+                                <input type="text" name="loginId" placeholder="Login ID" required class="w-full p-2 rounded-lg bg-gray-800 border border-gray-700 text-white">
+                                <input type="password" name="password" placeholder="Password" required class="w-full p-2 rounded-lg bg-gray-800 border border-gray-700 text-white">
+                                <select name="accountType" class="w-full p-2 rounded-lg bg-gray-800 border border-gray-700 text-white">
+                                    <option value="Demo">Demo</option>
+                                    <option value="Live">Live</option>
+                                </select>
+                                <button type="submit" class="w-full py-2 rounded-lg font-bold text-white bg-indigo-600 hover:bg-indigo-700 transition duration-200">
+                                    Connect Now
+                                </button>
+                            </form>
+                        </div>
+                    </div>
+
+                    <!-- Server Auto-Uploader Panel -->
+                    <div class="mb-6 border border-gray-700 rounded-lg overflow-hidden">
+                        <input type="checkbox" id="uploader-toggle" class="hidden peer">
+                        <label for="uploader-toggle" class="p-4 flex justify-between items-center cursor-pointer bg-gray-800 hover:bg-gray-700/50">
+                            <h4 class="font-bold text-lg text-white flex items-center">
+                                <i data-lucide="cloud-upload" class="w-5 h-5 mr-2 text-yellow-400"></i>
+                                Server Auto-Uploader
+                            </h4>
+                            <i data-lucide="chevron-down" class="w-5 h-5 text-gray-400 transition-transform duration-300 peer-checked:rotate-180"></i>
+                        </label>
+                        <div class="p-4 bg-[#161b22] peer-checked:block transition-all duration-300 hidden space-y-4 text-sm">
+                            <p class="text-gray-400">Upload a TXT or CSV file containing one server name per line to update the dropdown lists for all users.</p>
+                            
+                            <div class="space-y-2 p-3 bg-gray-900 rounded-lg">
+                                <p id="current-mt4-servers" class="text-sm font-medium text-indigo-300">Current MT4 servers loaded: 0</p>
+                                <label class="block text-gray-300">MT4 Server List (.txt/.csv)</label>
+                                <input type="file" onchange="window.handleFileUpload(event, 'mt4')" accept=".csv, .txt" class="w-full text-xs text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-indigo-50 file:text-indigo-700 hover:file:bg-indigo-100">
+                            </div>
+
+                            <div class="space-y-2 p-3 bg-gray-900 rounded-lg">
+                                <p id="current-mt5-servers" class="text-sm font-medium text-emerald-300">Current MT5 servers loaded: 0</p>
+                                <label class="block text-gray-300">MT5 Server List (.txt/.csv)</label>
+                                <input type="file" onchange="window.handleFileUpload(event, 'mt5')" accept=".csv, .txt" class="w-full text-xs text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-emerald-50 file:text-emerald-700 hover:file:bg-emerald-100">
+                            </div>
+
+                            <p id="last-server-update" class="text-xs text-gray-500 pt-2 border-t border-gray-700"></p>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Main Content (Dashboard) -->
+                <main class="flex-1 p-4 sm:p-8 overflow-x-hidden">
+                    <header class="text-center mb-10 pb-4 border-b border-gray-700 flex justify-between items-center">
+                        <button onclick="window.toggleSidebar()" class="lg:hidden p-2 text-gray-400 hover:text-white rounded-lg bg-[#161b22]">
+                            <i data-lucide="menu" class="w-6 h-6"></i>
+                        </button>
+                        <h1 class="text-4xl sm:text-5xl font-extrabold text-cyan-400 flex items-center justify-center flex-1">
+                            <i data-lucide="scan-eye" class="w-8 h-8 sm:w-10 sm:h-10 mr-3 text-indigo-400"></i>
+                            SMC Signal Dashboard & History
+                        </h1>
+                    </header>
+
+                    <!-- Status Panel (Now includes LLM Sentiment Button) -->
+                    <div id="status-panel" class="mb-8 p-4 bg-[#161b22] border border-gray-800 rounded-lg text-sm transition duration-500">
+                        <p id="analysis-status" class="font-medium text-gray-400">Initializing...</p>
+                        
+                        <div class="mt-4 pt-4 border-t border-gray-800">
+                            <button id="sentiment-btn" onclick="window.generateMarketSentiment()" class="w-full py-2 rounded-lg font-bold text-sm text-white bg-sky-600 hover:bg-sky-700 transition duration-200 flex items-center justify-center">
+                                <i data-lucide="trending-up" class="w-4 h-4 mr-2"></i>
+                                ✨ Summarize Market Sentiment
+                            </button>
+                        </div>
+                    </div>
+                    
+                    <!-- LLM Sentiment Output Area -->
+                    <div class="mb-8 p-6 bg-gray-900 border border-sky-700 rounded-xl shadow-lg">
+                        <h2 class="text-xl font-bold text-white mb-3 flex items-center border-b border-gray-800 pb-2">
+                             <i data-lucide="sun" class="w-5 h-5 mr-2 text-sky-400"></i>
+                            Global Macro Outlook (AI Generated)
+                        </h2>
+                        <div id="llm-sentiment-summary" class="text-sm text-gray-400 italic">
+                            ${window.appState.sentimentSummaryText}
+                        </div>
+                    </div>
 
 
-  const handleTradeAction = (signalId, action) => {
-    // Manually confirmed trades are set to CONFIRMED
-    setSignals(prevSignals => prevSignals.map(s =>
-      s.id === signalId && s.status === 'NEW' ? { ...s, status: action } : s
-    ));
-    // In a real app, this would trigger an execution order via the MT4/MT5 API
-    console.log(`SIMULATION: Signal ${signalId} manually marked as ${action}.`);
-  };
+                    <!-- Current Signals Section -->
+                    <h2 class="text-3xl font-bold text-white mb-6 border-b border-gray-700 pb-2">
+                        Current 4 Signals
+                    </h2>
+                    <div id="current-signals-container" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-12">
+                        <!-- Current signals will be injected here -->
+                    </div>
 
-  const handleLogout = async () => {
-    if (authInstance) {
-      try {
-        await signOut(authInstance);
-        // The onAuthStateChanged listener will handle signing the user back in anonymously
-      } catch (e) {
-        console.error("Logout error:", e);
-      }
-    }
-  };
+                    <!-- Previous Signals Section -->
+                    <h2 class="text-3xl font-bold text-white mb-6 border-b border-gray-700 pb-2 flex items-center">
+                        Previous Signals Archive 
+                        <i data-lucide="archive" class="w-6 h-6 ml-3 text-gray-500"></i>
+                    </h2>
+                    <div id="previous-signals-container" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
+                        <!-- Previous signals will be injected here -->
+                        <p id="no-previous-signals" class="text-gray-500 italic md:col-span-4">No previous signals tracked yet.</p>
+                    </div>
+                </main>
+            </div>
+        `;
 
-  const renderStatus = () => {
-    if (error) return <Notification type="error">{error}</Notification>;
-    if (!isAuthReady || loadingMT4) return <Notification type="info" children={<>Loading configuration and user state...</>} />;
-    if (!userId) return <Notification type="warning" children={<>Signing you in anonymously...</>} />;
+        const renderApp = () => {
+            const root = document.getElementById('app-root');
+            if (!isAuthReady) {
+                 // Prevent rendering until auth state is resolved
+                root.innerHTML = '<div class="min-h-screen flex items-center justify-center text-xl text-gray-400">Loading Application...</div>';
+                return;
+            }
 
-    return (
-      <div className="flex items-center space-x-4">
-        <div className={`flex items-center text-sm px-3 py-1 rounded-full ${mt4Connected ? 'bg-green-700 text-green-200' : 'bg-red-700 text-red-200'}`}>
-          <Power className="w-4 h-4 mr-2" />
-          {mt4Connected ? (autoTrade ? 'MT4/MT5: Auto Trading ON' : 'MT4/MT5: Manual Execution') : 'MT4/MT5: Disconnected'}
-        </div>
-        <div className="text-sm text-gray-400 hidden sm:block">
-          <User className="w-4 h-4 inline mr-1" /> User ID: <span className="font-mono text-xs">{userId}</span>
-        </div>
-      </div>
-    );
-  };
+            if (window.appState.isAuthenticated) {
+                // Render Dashboard
+                root.innerHTML = getDashboardHTML();
+                
+                // Initialize MT4/MT5 forms
+                renderAccountStatus('mt4');
+                renderAccountStatus('mt5');
+                updateServerDropdowns();
+                
+                // Start signal generation/refresh loop
+                if (signalInterval) clearInterval(signalInterval);
+                refreshDashboard();
+                signalInterval = setInterval(refreshDashboard, REFRESH_INTERVAL_MS);
 
-  return (
-    <div className="min-h-screen bg-gray-900 text-gray-100 font-inter p-4 sm:p-8">
-      {/* Header and Controls */}
-      <header className="mb-8 flex flex-col md:flex-row justify-between items-center space-y-4 md:space-y-0">
-        <h1 className="text-3xl font-extrabold text-indigo-400 flex items-center">
-          <Signal className="w-8 h-8 mr-3" /> Forex Signal Analyzer
-        </h1>
-        <div className="flex space-x-3 items-center">
-          {renderStatus()}
-          <button
-            onClick={() => setIsModalOpen(true)}
-            className="p-3 rounded-full bg-indigo-600 hover:bg-indigo-700 transition duration-150 shadow-lg"
-            title="MT4/MT5 Connection Settings"
-          >
-            <Settings className="w-5 h-5" />
-          </button>
-          <button
-            onClick={handleLogout}
-            className="p-3 rounded-full bg-red-600 hover:bg-red-700 transition duration-150 shadow-lg"
-            title="Logout / Change User"
-          >
-            <LogOut className="w-5 h-5" />
-          </button>
-        </div>
-      </header>
+            } else {
+                // Render Login
+                root.innerHTML = getLoginHTML();
+            }
+            lucide.createIcons();
+        };
 
-      {/* Control Panel and Status */}
-      <div className="bg-gray-800 p-4 rounded-xl shadow-xl mb-6 flex justify-between items-center flex-wrap gap-4">
-        <div className="text-sm text-gray-300 flex items-center space-x-2">
-          <Repeat className="w-5 h-5 text-yellow-500" />
-          <span>Last Scan: {lastRefresh ? lastRefresh.toLocaleTimeString() : 'N/A'}</span>
-        </div>
-        <button
-          onClick={refreshSignals}
-          disabled={isRefreshing}
-          className="px-4 py-2 bg-purple-600 text-white font-semibold rounded-lg hover:bg-purple-700 transition disabled:bg-gray-600 disabled:cursor-not-allowed flex items-center"
-        >
-          {isRefreshing ? (
-            <>
-              <Loader2 className="w-4 h-4 mr-2 animate-spin" /> Scanning...
-            </>
-          ) : (
-            <>
-              <Repeat className="w-4 h-4 mr-2" /> Manual Scan
-            </>
-          )}
-        </button>
-        <div className="text-sm text-gray-300 flex items-center space-x-2">
-          <Signal className="w-5 h-5 text-cyan-400" />
-          <span>Analysis Timeframes: M30, H1, H4</span>
-        </div>
-      </div>
+        const getLoginHTML = () => `
+            <div class="min-h-screen flex items-center justify-center login-bg-gradient p-4">
+                <div class="w-full max-w-md bg-[#161b22] rounded-xl p-8 shadow-2xl border border-gray-800">
+                    <div class="text-center mb-8">
+                        <i data-lucide="scan-eye" class="w-12 h-12 text-indigo-400 mx-auto mb-2"></i>
+                        <h1 class="text-3xl font-extrabold text-white">SMC Dashboard Login</h1>
+                        <p class="text-gray-400 mt-1">Access your institutional trading signals</p>
+                    </div>
+                    <form id="login-form" onsubmit="window.handleLogin(event)">
+                        <div class="space-y-4">
+                            <div>
+                                <label for="username" class="block text-sm font-medium text-gray-400 mb-1">Email or Username</label>
+                                <input type="text" id="username" name="username" required class="w-full p-3 rounded-lg bg-gray-800 border border-gray-700 focus:ring-indigo-500 focus:border-indigo-500 text-white placeholder-gray-500">
+                            </div>
+                            <div>
+                                <label for="password" class="block text-sm font-medium text-gray-400 mb-1">Password</label>
+                                <input type="password" id="password" name="password" required class="w-full p-3 rounded-lg bg-gray-800 border border-gray-700 focus:ring-indigo-500 focus:border-indigo-500 text-white placeholder-gray-500">
+                            </div>
+                            <div class="flex justify-between items-center">
+                                <a href="#" class="text-sm font-medium text-indigo-400 hover:text-indigo-300 transition duration-150">Forgot Password?</a>
+                            </div>
+                            <button type="submit" class="w-full py-3 rounded-lg font-bold text-white bg-indigo-600 hover:bg-indigo-700 transition duration-200 shadow-lg shadow-indigo-600/30">
+                                Log In
+                            </button>
+                            <button type="button" class="w-full py-3 rounded-lg font-bold text-indigo-400 bg-gray-700/50 hover:bg-gray-700 transition duration-200 border border-indigo-500/50">
+                                Create Account
+                            </button>
+                        </div>
+                    </form>
+                </div>
+            </div>
+        `;
+        
+        window.handleLogin = (event) => {
+            event.preventDefault();
+            const form = event.target;
+            const username = form.username.value;
+            // In a real app, this would call Firebase signInWithEmailAndPassword.
+            // Here, we simulate success and move to the dashboard.
+            console.log(`Simulating login for: ${username}`);
+            alertModal('Login Successful', `Welcome back, ${username}! Redirecting to dashboard.`);
+            
+            // Wait for modal close, then render the app
+            setTimeout(() => {
+                closeModal();
+                window.appState.isAuthenticated = true;
+                // Re-render the app to switch from login to dashboard
+                renderApp(); 
+            }, 1500);
+        };
 
-      {/* Signal Dashboard */}
-      <div className="bg-gray-800 rounded-xl shadow-2xl overflow-hidden border border-gray-700">
-        <div className="p-4 bg-gray-700 text-lg font-bold text-white flex justify-between items-center">
-          <h2>High-Probability Signals (R:R $\ge$ 5:1)</h2>
-          <span className="text-sm text-gray-400">Total Signals: {signals.length}</span>
-        </div>
+        // --- Custom Modal UI for Alerts (No alert() or confirm()) ---
+        const modalHTML = `
+            <div id="custom-modal" class="fixed inset-0 bg-black/70 z-[100] flex items-center justify-center hidden p-4">
+                <div class="bg-[#161b22] p-6 rounded-xl max-w-xl w-full border border-gray-700 shadow-2xl overflow-y-auto max-h-[90vh]">
+                    <h3 id="modal-title" class="text-xl font-bold text-white mb-3 border-b border-gray-700 pb-2">Alert</h3>
+                    <div id="modal-message" class="text-gray-300 mb-6 leading-relaxed">Message content.</div>
+                    <button onclick="window.closeModal()" class="w-full py-2 rounded-lg font-bold text-white bg-indigo-600 hover:bg-indigo-700 transition duration-200">
+                        Close
+                    </button>
+                </div>
+            </div>
+        `;
 
-        {signals.length === 0 ? (
-          <div className="p-12 text-center text-gray-500">
-            <Signal className="w-12 h-12 mx-auto mb-4" />
-            <p>No high-probability signals found in the last scan. Waiting for market structure and candlestick confirmation.</p>
-          </div>
-        ) : (
-          <div className="divide-y divide-gray-700">
-            {signals.map(signal => (
-              <SignalRow
-                key={signal.id}
-                signal={signal}
-                mt4Connected={mt4Connected}
-                autoTrade={autoTrade}
-                handleTradeAction={handleTradeAction}
-              />
-            ))}
-          </div>
-        )}
-      </div>
-
-      {/* Footer / Disclaimer */}
-      <footer className="mt-8 text-center text-xs text-gray-500">
-        <p>Disclaimer: This platform uses simulated data for Forex signal generation (Market Structure, Candlesticks, R:R $\ge$ 5:1). Live execution via MT4/MT5 is simulated for demonstration purposes only.</p>
-        <p>Fixed parameters: SL $\approx$ 30 pips, TP $\approx$ 150-200 pips.</p>
-      </footer>
-
-      {/* MT4 Connection Modal */}
-      {isModalOpen && (
-        <MT4ConnectionModal
-          mt4Settings={mt4Settings}
-          saveSettings={saveSettings}
-          onClose={() => setIsModalOpen(false)}
-        />
-      )}
-    </div>
-  );
-};
-
-export default App;
+        // --- Global Initialization ---
+        document.addEventListener('DOMContentLoaded', () => {
+            document.body.insertAdjacentHTML('beforeend', modalHTML);
+            const root = document.createElement('div');
+            root.id = 'app-root';
+            document.body.appendChild(root);
+            
+            // We rely on onAuthStateChanged to call renderApp once authentication is ready.
+            if (Object.keys(firebaseConfig).length === 0) {
+                // If in simulation mode (no config), render app immediately after timeout
+                renderApp(); 
+            } else {
+                 // Render a loading state until isAuthReady is true
+                 renderApp(); 
+            }
+        });
+        
+    </script>
+</body>
+</html>
